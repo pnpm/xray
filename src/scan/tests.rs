@@ -160,3 +160,27 @@ export { A };";
     let origins = origins(source, "index.d.ts");
     assert!(origins.iter().all(|(_, origin)| *origin == Origin::Types), "{origins:?}");
 }
+
+/// `import { type A }` is elided by default but survives under
+/// `verbatimModuleSyntax`, where TypeScript emits `import {} from "pkg"` and the
+/// module really is loaded. Since the consumer's compiler options are unknowable
+/// from the package, the runtime reading is the safe one: it cannot hide a
+/// dependency the program turns out to need. Only the statement-level `import
+/// type`, which is erased under every option, counts as type-only.
+#[test]
+fn inline_type_specifiers_are_read_as_runtime() {
+    let statement_level = origins("import type { A } from 'erased';", "index.ts");
+    assert_eq!(statement_level[0].1, Origin::Types);
+
+    for source in [
+        "import { type B } from 'kept';",
+        "import { type C, D } from 'kept';",
+        "export { type F } from 'kept';",
+    ] {
+        let found = origins(source, "index.ts");
+        assert!(
+            found.iter().all(|(_, origin)| *origin == Origin::Runtime),
+            "{source} should stay runtime: {found:?}",
+        );
+    }
+}
