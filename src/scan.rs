@@ -60,6 +60,17 @@ impl Origin {
     }
 }
 
+/// Extensions this scanner can read: what a package ships as behaviour, and
+/// what it ships as types. A manifest can point at a `.json` or an asset, and
+/// those are not source.
+const SCANNABLE: &[&str] = &[".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx"];
+
+/// Whether a file is worth handing to the parser at all.
+pub fn is_scannable(path: &Path) -> bool {
+    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    SCANNABLE.iter().any(|extension| name.ends_with(extension))
+}
+
 /// Whether a path names a file that carries types rather than behaviour. The two
 /// are parsed differently and reported differently, since a dependency reached
 /// only from declarations breaks type checking while one reached from executable

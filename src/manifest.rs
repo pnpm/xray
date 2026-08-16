@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
 
 type DepMap = BTreeMap<String, String>;
@@ -23,6 +24,23 @@ pub struct Manifest {
     pub bundle_dependencies: Vec<String>,
     #[serde(default)]
     pub bundled_dependencies: Vec<String>,
+    /// Entry-point fields, kept as raw JSON because each one is a string in some
+    /// packages and a nested map of conditions or subpaths in others. Only the
+    /// string leaves matter here: they name files.
+    #[serde(default)]
+    pub main: Value,
+    #[serde(default)]
+    pub module: Value,
+    #[serde(default)]
+    pub browser: Value,
+    #[serde(default)]
+    pub types: Value,
+    #[serde(default)]
+    pub typings: Value,
+    #[serde(default)]
+    pub bin: Value,
+    #[serde(default)]
+    pub exports: Value,
 }
 
 impl Manifest {
@@ -48,5 +66,42 @@ impl Manifest {
 
     pub fn id(&self) -> String {
         format!("{}@{}", self.name, self.version)
+    }
+
+    /// Every relative path the manifest names as a way into the package.
+    pub fn entry_paths(&self) -> Vec<String> {
+        let mut paths = Vec::new();
+        for field in [
+            &self.main,
+            &self.module,
+            &self.browser,
+            &self.types,
+            &self.typings,
+            &self.bin,
+            &self.exports,
+        ] {
+            collect_paths(field, &mut paths);
+        }
+        paths
+    }
+}
+
+/// Every string leaf under an entry-point field. `exports` nests subpaths inside
+/// conditions to arbitrary depth and `bin` maps command names to files, so the
+/// shape varies; what is wanted from all of them is the same.
+fn collect_paths(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(path) => out.push(path.clone()),
+        Value::Object(map) => {
+            for nested in map.values() {
+                collect_paths(nested, out);
+            }
+        }
+        Value::Array(items) => {
+            for nested in items {
+                collect_paths(nested, out);
+            }
+        }
+        _ => {}
     }
 }

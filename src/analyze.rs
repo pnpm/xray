@@ -4,6 +4,7 @@ mod tests;
 use crate::{
     classify::missing_package,
     manifest::Manifest,
+    reachable::reachable_files,
     report::{Finding, PackageReport, Severity},
     scan::{self, Origin},
 };
@@ -14,19 +15,39 @@ use std::{
 };
 use walkdir::WalkDir;
 
-/// Extensions worth reading: what the package ships as behaviour, and what it
-/// ships as types.
-const SCANNED_EXTENSIONS: &[&str] = &[".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx"];
+/// Which of a package's files to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// Follow the package's own encapsulation: walk from the entry points when
+    /// an `exports` map says which files are reachable, and read everything
+    /// otherwise.
+    Declared,
+    /// Everything in the tarball, including tests, templates and examples whose
+    /// dependencies belong to whoever runs them.
+    EveryFile,
+}
 
 /// What one installed package reaches for but never declared, or `None` when it
 /// declared everything its shipped files name.
-pub fn analyze(package_dir: &Path) -> Result<Option<PackageReport>> {
+pub fn analyze(package_dir: &Path, scope: Scope) -> Result<Option<PackageReport>> {
     let manifest = Manifest::read(package_dir)?;
     let declared: HashSet<&str> = manifest.reachable().collect();
 
+    // An `exports` map is a package saying which files a consumer may reach;
+    // without one, `require("pkg/anything")` resolves and every shipped file is
+    // part of the surface — including the tests, whether the author meant that
+    // or not.
+    let encapsulated = !manifest.exports.is_null();
+    let files: Vec<PathBuf> = match scope {
+        Scope::Declared if encapsulated => {
+            reachable_files(package_dir, &manifest).into_iter().collect()
+        }
+        _ => scannable_files(package_dir).collect(),
+    };
+
     let mut referenced: BTreeSet<(scan::Requirement, Origin)> = BTreeSet::new();
     let mut unparsed = Vec::new();
-    for file in scannable_files(package_dir) {
+    for file in files {
         let Ok(source) = std::fs::read_to_string(&file) else {
             continue;
         };
@@ -79,8 +100,5 @@ pub fn scannable_files(package_dir: &Path) -> impl Iterator<Item = PathBuf> {
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
         .map(walkdir::DirEntry::into_path)
-        .filter(|path| {
-            let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
-            SCANNED_EXTENSIONS.iter().any(|extension| name.ends_with(extension))
-        })
+        .filter(|path| scan::is_scannable(path))
 }
