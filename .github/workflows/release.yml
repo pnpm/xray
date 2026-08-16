@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   build:
+    name: ${{ matrix.packageTarget }}
     strategy:
       fail-fast: false
       matrix:
@@ -43,61 +44,74 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-      - name: Install musl toolchain
-        if: endsWith(matrix.target, '-musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - run: cargo build --release --target ${{ matrix.target }}
-      - name: Stage the executable under its package target name
-        shell: bash
-        run: |
-          if [[ "${{ matrix.packageTarget }}" == win32-* ]]; then
-            cp "target/${{ matrix.target }}/release/xray.exe" "xray.${{ matrix.packageTarget }}.exe"
-          else
-            cp "target/${{ matrix.target }}/release/xray" "xray.${{ matrix.packageTarget }}"
-          fi
-      - uses: actions/upload-artifact@v4
-        with:
-          name: xray.${{ matrix.packageTarget }}
-          path: xray.${{ matrix.packageTarget }}*
-          if-no-files-found: error
+    - name: Checkout Commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    # The toolchain itself comes from rust-toolchain.toml, which rustup honours
+    # on the first cargo invocation.
+    - name: Add the Rust target
+      run: rustup target add ${{ matrix.target }}
+    - name: Install the musl toolchain
+      if: endsWith(matrix.target, '-musl')
+      run: sudo apt-get update && sudo apt-get install -y musl-tools
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        key: ${{ matrix.target }}
+    - name: Build
+      run: cargo build --locked --release --target ${{ matrix.target }}
+    # The artifact is named for the package it will end up in, so the publish
+    # job can lay the packages out without knowing about Rust triples.
+    - name: Stage the executable under its package target name
+      shell: bash
+      run: |
+        if [[ "${{ matrix.packageTarget }}" == win32-* ]]; then
+          cp "target/${{ matrix.target }}/release/xray.exe" "xray.${{ matrix.packageTarget }}.exe"
+        else
+          cp "target/${{ matrix.target }}/release/xray" "xray.${{ matrix.packageTarget }}"
+        fi
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: xray.${{ matrix.packageTarget }}
+        path: xray.${{ matrix.packageTarget }}*
+        if-no-files-found: error
 
   publish:
+    name: Publish to npm
     needs: build
     runs-on: ubuntu-latest
-    # Trusted publishing to npm signs the release with the workflow's identity,
-    # so no long-lived token is stored anywhere.
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-      - uses: actions/download-artifact@v5
-        with:
-          merge-multiple: true
-      - run: node scripts/generate-packages.mjs
-      # The wrapper depends on the platform packages, so publishing it first
-      # would leave a version on the registry that cannot resolve a binary.
-      - name: Publish the platform packages
-        run: |
-          for dir in npm/xray.*; do
-            npm publish "$dir" --access public --provenance --tag "${{ inputs.tag }}"
-          done
-        env:
-          # Trusted publishing cannot be configured for a package that does not
-          # exist yet, so the first release of each package needs the token.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish the wrapper
-        run: npm publish npm/xray --access public --provenance --tag "${{ inputs.tag }}"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    - name: Checkout Commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Install pnpm
+      uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
+      with:
+        version: 11
+        install: false
+    - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        merge-multiple: true
+    - name: Lay out the platform packages
+      run: node scripts/generate-packages.mjs
+    - name: Authenticate with the registry
+      run: printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > ~/.npmrc
+      env:
+        # Trusted publishing cannot be configured for a package that does not
+        # exist yet, so the first release of each package needs the token.
+        NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    # Generating the packages leaves the working tree dirty and the checkout is
+    # detached, so the Git checks have nothing useful to say here.
+    - name: Publish the platform packages
+      run: |
+        for dir in npm/xray.*; do
+          pn publish "$dir" --access public --provenance --no-git-checks --tag "${{ inputs.tag }}"
+        done
+    # The wrapper depends on the platform packages, so publishing it first would
+    # leave a version on the registry that resolves to no binary at all.
+    - name: Publish the wrapper
+      run: pn publish npm/xray --access public --provenance --no-git-checks --tag "${{ inputs.tag }}"
