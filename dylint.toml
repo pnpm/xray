@@ -1,0 +1,67 @@
+# Dylint configuration, mirroring pnpm/pnpm. cargo-dylint reads
+# `[workspace.metadata.dylint]` from this file.
+#
+# Run with: `cargo dylint --all -- --all-targets` or the `just dylint` recipe.
+[workspace.metadata.dylint]
+# Pinned by commit rather than tag: a tag is a mutable ref, and this library is
+# compiled and loaded into the compiler, so moving it would change what CI runs
+# without any change here. The commit is the one tagged 0.0.0-rc.22.
+libraries = [
+  { git = "https://github.com/KSXGitHub/perfectionist", rev = "3fbf4ef38fee87ea5b3c23a6600f432818d6858c" },
+]
+
+[perfectionist]
+enable = ["unordered_derives"]
+disable = ["needless_borrowed_parameters"]
+
+# Code spans read fine in `--help` and stay useful as `cargo doc` docs, so
+# keep them; links and HTML remain forbidden and are cleaned from help text.
+["perfectionist::clap_help_markdown"]
+ignore_constructs = ["code_span"]
+
+# Imports collapse to one `use` per crate root, the granularity rustfmt spells
+# `imports_granularity = "Crate"` and perfectionist spells `"crate"`.
+["perfectionist::import_granularity_mismatch"]
+style = "crate"
+
+# Every unit test lives in an external file (shorter production files, less
+# churn). Flag any inline test item, not just the ones over a line budget.
+["perfectionist::excessive_inline_tests"]
+inline_style = "external_only"
+
+# A bare `#NNN` is just as ambiguous in a plain `//` comment as in a doc
+# comment, so lint those too.
+["perfectionist::bare_issue_reference"]
+include_plain_comments = true
+
+# Narrowed to names that resolve in the documenting item's own module,
+# multi-word only.
+["perfectionist::bare_identifier_reference"]
+reference_scope = "own_module"
+min_words = 2
+
+# Scan comments only: forge URLs in string literals are test data, not
+# citations. `allow_version_patterns` accepts version-shaped release-tag
+# citations without requiring a SHA.
+["perfectionist::unpinned_repo_ref"]
+scan_string_literals = false
+allow_version_patterns = true
+
+["perfectionist::unordered_derives"]
+style = "prefix_then_alphabetical"
+prefix = [
+  "Debug",
+  "Default",
+  "Display",
+  "Error",
+  "Diagnostic",
+  "Clone",
+  "Copy",
+  "PartialEq",
+  "Eq",
+  "PartialOrd",
+  "Ord",
+  "Hash",
+  "Serialize",
+  "Deserialize",
+]
