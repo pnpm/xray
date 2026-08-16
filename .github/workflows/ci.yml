@@ -24,8 +24,14 @@ jobs:
     - run: cargo test --locked
 
   launcher:
-    name: npm launcher
+    name: npm launcher (node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor `engines.node` promises, and the current release. Leaving
+        # the runtime unpinned would let the promise drift out of test.
+        node: ['20.19', '24']
     steps:
     - name: Checkout Commit
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,5 +41,8 @@ jobs:
       uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
       with:
         version: 11
+        runtime: node@${{ matrix.node }}
         install: false
-    - run: node --test "npm/xray/test/*.test.mjs"
+    # The glob is expanded by the shell, not by `node --test`, whose own glob
+    # support is newer than the floor above.
+    - run: node --test npm/xray/test/*.test.mjs

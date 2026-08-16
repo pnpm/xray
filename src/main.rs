@@ -315,8 +315,14 @@ mod tests {
         write(&app.join("node_modules/vendored/index.d.ts"), "import 'not-yours';\n");
 
         let helper = store.join("helper/node_modules/helper");
-        write(&helper.join("package.json"), &manifest("helper", ""));
-        write(&helper.join("index.d.ts"), "export declare const ok: boolean;\n");
+        write(
+            &helper.join("package.json"),
+            &manifest("helper", r#","dependencies":{"declared":"^2"}"#),
+        );
+        write(
+            &helper.join("index.d.ts"),
+            "import type { D } from 'declared';\nexport type { D };\n",
+        );
 
         symlink(&helper, store.join("app/node_modules/helper")).unwrap();
         fs::create_dir_all(project.join("node_modules")).unwrap();

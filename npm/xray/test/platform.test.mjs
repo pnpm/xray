@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import process from 'node:process'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -21,7 +22,9 @@ test('only Linux is split by libc', () => {
 })
 
 test('every target it can name has a package published for it', async () => {
-  const { default: manifest } = await import('../package.json', { with: { type: 'json' } })
+  const manifest = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8')
+  )
   const published = Object.keys(manifest.optionalDependencies)
   for (const platform of ['darwin', 'linux', 'win32']) {
     for (const arch of ['x64', 'arm64']) {
