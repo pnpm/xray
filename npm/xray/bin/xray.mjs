@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import process from 'node:process'
+import { platformTarget } from '../platform.mjs'
 
 const EXECUTABLE = process.platform === 'win32' ? 'xray.exe' : 'xray'
 
@@ -41,16 +42,4 @@ function resolveExecutable () {
     )
     process.exit(1)
   }
-}
-
-function platformTarget () {
-  const target = `${process.platform}-${process.arch}`
-  return process.platform === 'linux' && isMusl() ? `${target}-musl` : target
-}
-
-// musl builds report no glibc version, which is the only signal Node exposes
-// without shelling out to `ldd`.
-function isMusl () {
-  const report = typeof process.report?.getReport === 'function' ? process.report.getReport() : null
-  return report != null && !report.header?.glibcVersionRuntime
 }

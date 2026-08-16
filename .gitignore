@@ -1,5 +1,6 @@
 /target
 /npm/xray.*
+/npm/xray/node_modules
 /npm/xray/README.md
 /npm/xray/LICENSE
 /xray.*
