@@ -282,3 +282,158 @@ fn nearest_modules_dir(package_dir: &Path) -> Option<PathBuf> {
         .find(|ancestor| ancestor.file_name().is_some_and(|name| name == "node_modules"))
         .map(Path::to_path_buf)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write(path: &Path, contents: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
+    }
+
+    fn manifest(name: &str, extra: &str) -> String {
+        format!(r#"{{"name":"{name}","version":"1.0.0"{extra}}}"#)
+    }
+
+    /// A project whose packages really live elsewhere, the shape a global
+    /// virtual store produces: `node_modules` holds links, and each store entry
+    /// holds the package next to the dependencies it may reach.
+    #[cfg(unix)]
+    fn global_virtual_store() -> tempfile::TempDir {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        let store = root.path().join("store");
+
+        let app = store.join("app/node_modules/app");
+        write(&app.join("package.json"), &manifest("app", r#","devDependencies":{"ghost":"^1"}"#));
+        write(&app.join("index.d.ts"), "import type { G } from 'ghost';\nexport type { G };\n");
+        // Bundled copies must not be mistaken for the package's own sources.
+        write(&app.join("node_modules/vendored/index.d.ts"), "import 'not-yours';\n");
+
+        let helper = store.join("helper/node_modules/helper");
+        write(
+            &helper.join("package.json"),
+            &manifest("helper", r#","dependencies":{"declared":"^2"}"#),
+        );
+        write(
+            &helper.join("index.d.ts"),
+            "import type { D } from 'declared';\nexport type { D };\n",
+        );
+
+        symlink(&helper, store.join("app/node_modules/helper")).unwrap();
+        fs::create_dir_all(project.join("node_modules")).unwrap();
+        symlink(&app, project.join("node_modules/app")).unwrap();
+
+        root
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walks_from_the_project_into_every_store_entry() {
+        let root = global_virtual_store();
+        let found = installed_packages(&root.path().join("project")).unwrap();
+        let names: Vec<_> =
+            found.iter().map(|dir| dir.file_name().unwrap().to_str().unwrap()).collect();
+        assert_eq!(names, ["app", "helper"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reports_a_dev_dependency_that_leaks_into_declarations() {
+        let root = global_virtual_store();
+        let app = root.path().join("store/app/node_modules/app");
+        let report = analyze(&app).unwrap().expect("app should have a finding");
+        assert_eq!(report.package, "app@1.0.0");
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].dependency, "ghost");
+        assert_eq!(report.findings[0].severity, Severity::DevDependency);
+        assert_eq!(report.findings[0].declared_range.as_deref(), Some("^1"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_package_that_declares_what_it_imports_is_not_reported() {
+        let root = global_virtual_store();
+        let helper = root.path().join("store/helper/node_modules/helper");
+        assert!(analyze(&helper).unwrap().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn declarations_bundled_under_node_modules_are_not_the_package_own() {
+        let root = global_virtual_store();
+        let app = root.path().join("store/app/node_modules/app");
+        let scanned: Vec<_> = declaration_files(&app).collect();
+        assert_eq!(scanned.len(), 1, "{scanned:?}");
+        assert!(scanned[0].ends_with("app/index.d.ts"), "{scanned:?}");
+    }
+
+    fn declared<'a>(names: &'a [&'a str]) -> HashSet<&'a str> {
+        names.iter().copied().collect()
+    }
+
+    #[test]
+    fn takes_the_package_out_of_a_specifier() {
+        assert_eq!(package_name("lodash"), Some("lodash"));
+        assert_eq!(package_name("lodash/fp"), Some("lodash"));
+        assert_eq!(package_name("@medplum/core"), Some("@medplum/core"));
+        assert_eq!(package_name("pdfmake/interfaces"), Some("pdfmake"));
+        assert_eq!(package_name("@scope/name/deep/path"), Some("@scope/name"));
+    }
+
+    #[test]
+    fn ignores_specifiers_that_need_nothing_installed() {
+        for specifier in [
+            "./relative",
+            "../up",
+            "/absolute",
+            "#subpath-import",
+            "node:fs",
+            "fs",
+            "worker_threads",
+            "data:text/javascript,export{}",
+            "https://example.com/mod.js",
+            "",
+        ] {
+            assert_eq!(package_name(specifier), None, "{specifier} should need no package");
+        }
+    }
+
+    #[test]
+    fn a_scope_on_its_own_is_not_a_package() {
+        assert_eq!(package_name("@scope"), None);
+    }
+
+    #[test]
+    fn maps_a_name_to_its_types_package() {
+        assert_eq!(types_package("node"), "@types/node");
+        assert_eq!(types_package("@medplum/core"), "@types/medplum__core");
+    }
+
+    #[test]
+    fn an_import_is_satisfied_by_the_types_package_that_declares_it() {
+        let requirement = Requirement::Module("estree".to_string());
+        assert_eq!(missing_package(&requirement, &declared(&["@types/estree"])), None);
+        assert_eq!(missing_package(&requirement, &declared(&[])), Some("estree".to_string()));
+    }
+
+    #[test]
+    fn a_types_reference_is_satisfied_by_either_spelling() {
+        let requirement = Requirement::TypesReference("node".to_string());
+        assert_eq!(missing_package(&requirement, &declared(&["@types/node"])), None);
+        assert_eq!(missing_package(&requirement, &declared(&["node"])), None);
+    }
+
+    #[test]
+    fn an_unsatisfied_types_reference_is_reported_under_the_types_name() {
+        let requirement = Requirement::TypesReference("estree".to_string());
+        assert_eq!(
+            missing_package(&requirement, &declared(&[])),
+            Some("@types/estree".to_string())
+        );
+    }
+}
