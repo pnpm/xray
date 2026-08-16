@@ -73,9 +73,9 @@ jobs:
         persist-credentials: false
     # Two caches with disjoint scopes. The workspace cache excludes
     # `target/dylint` so the lint library cannot leak across `dylint.toml`
-    # changes, and the library cache is keyed strictly on `dylint.toml` with no
-    # restore-keys, so a hit guarantees the cached `.so` matches the in-tree
-    # config.
+    # changes, and the library cache is keyed on `dylint.toml` and the toolchain
+    # with no restore-keys — the compiled `.so` is loaded by a driver built for
+    # one specific toolchain, so a hit has to guarantee both still match.
     - name: Cache workspace artifacts
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -90,7 +90,7 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: target/dylint
-        key: dylint-library-${{ hashFiles('dylint.toml') }}
+        key: dylint-library-${{ hashFiles('dylint.toml', 'rust-toolchain.toml') }}
     - name: Install cargo-dylint
       uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
       with:

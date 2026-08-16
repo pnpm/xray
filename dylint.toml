@@ -3,8 +3,11 @@
 #
 # Run with: `cargo dylint --all -- --all-targets` or the `just dylint` recipe.
 [workspace.metadata.dylint]
+# Pinned by commit rather than tag: a tag is a mutable ref, and this library is
+# compiled and loaded into the compiler, so moving it would change what CI runs
+# without any change here. The commit is the one tagged 0.0.0-rc.22.
 libraries = [
-  { git = "https://github.com/KSXGitHub/perfectionist", tag = "0.0.0-rc.22" },
+  { git = "https://github.com/KSXGitHub/perfectionist", rev = "3fbf4ef38fee87ea5b3c23a6600f432818d6858c" },
 ]
 
 [perfectionist]
