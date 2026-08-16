@@ -101,6 +101,12 @@ templates describing what a *generated* project needs, and tests that ship in
 the tarball. Reading the origin and the severity together usually separates
 them.
 
+A package that declares an `exports` map has said which of its files a consumer
+may reach, and only those files and what they import are read. Without such a
+map `require("pkg/test/spec")` resolves, so every shipped file is part of the
+package's surface whether its author meant that or not, and every one is read.
+`--all-files` ignores the map and reads everything regardless.
+
 ## What it looks at
 
 Every file a package ships as behaviour or as types — `.js`, `.mjs`, `.cjs`,
