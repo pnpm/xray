@@ -9,7 +9,23 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - run: cargo fmt --check
+    - name: Install Taplo CLI
+      uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
+      with:
+        tool: taplo-cli@0.8.1
+    - run: taplo format --check
+
+  clippy:
+    name: Clippy
     runs-on: ubuntu-latest
     steps:
     - name: Checkout Commit
@@ -19,9 +35,94 @@ jobs:
     # rust-toolchain.toml pins the version, and its "default" profile brings
     # rustfmt and clippy with it.
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-    - run: cargo fmt --check
-    - run: cargo clippy --all-targets --locked -- -D warnings
+    - run: cargo clippy --locked --all-targets -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
     - run: cargo test --locked
+
+  doc:
+    name: Doc
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+    # Rustdoc is a gate, not just output: a broken intra-doc link fails here.
+    - name: Doc
+      env:
+        RUSTDOCFLAGS: '-D warnings'
+      run: cargo doc --no-deps --document-private-items
+
+  dylint:
+    name: Dylint
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    # Two caches with disjoint scopes. The workspace cache excludes
+    # `target/dylint` so the lint library cannot leak across `dylint.toml`
+    # changes, and the library cache is keyed strictly on `dylint.toml` with no
+    # restore-keys, so a hit guarantees the cached `.so` matches the in-tree
+    # config.
+    - name: Cache workspace artifacts
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo
+          ~/.dylint_drivers
+          target
+          !target/dylint
+        key: dylint-workspace-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+        restore-keys: dylint-workspace-
+    - name: Cache the dylint library
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: target/dylint
+        key: dylint-library-${{ hashFiles('dylint.toml') }}
+    - name: Install cargo-dylint
+      uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
+      with:
+        tool: cargo-dylint,dylint-link
+    - name: Dylint
+      env:
+        RUSTFLAGS: '-D warnings'
+      run: cargo dylint --all -- --all-targets
+
+  deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Install cargo-deny
+      uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
+      with:
+        tool: cargo-deny
+    - run: cargo deny check
+
+  typos:
+    name: Spell Check
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: crate-ci/typos@8a48f81b6c64dcfea44b3633223084c4be58ac5f # v1.49.0
 
   launcher:
     name: npm launcher (node ${{ matrix.node }})

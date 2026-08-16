@@ -25,3 +25,38 @@ walkdir = "2"
 [dev-dependencies]
 tempfile = "3.27.0"
 yaml-rust2 = "0.11.0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(dylint_lib, values("perfectionist"))',
+] }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+
+# nursery-group opt-out, matching pnpm/pnpm: the suggested map_or_else closures
+# read worse than the if-let they replace.
+option_if_let_else = "allow"
+
+# restriction lints opted into individually — not part of any default group or
+# the nursery group, so these lines are what enable them.
+clone_on_ref_ptr = "warn"
+if_then_some_else_none = "warn"
+mod_module_files = "warn"           # forbids mod.rs, enforcing the flat module.rs layout
+undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+todo = "warn"
+unimplemented = "warn"
+exit = "warn"
+infinite_loop = "warn"
+mem_forget = "warn"
+unused_result_ok = "warn"
+pathbuf_init_then_push = "warn"
+string_add = "warn"
+verbose_file_reads = "warn"
+
+# cargo-group lints opted into individually (the cargo group is otherwise off).
+negative_feature_names = "warn"
+redundant_feature_names = "warn"
+wildcard_dependencies = "warn"
