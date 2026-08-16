@@ -68,18 +68,26 @@ impl Manifest {
         format!("{}@{}", self.name, self.version)
     }
 
+    /// Whether the package says which of its files a consumer may reach.
+    pub fn is_encapsulated(&self) -> bool {
+        !self.exports.is_null()
+    }
+
     /// Every relative path the manifest names as a way into the package.
+    ///
+    /// `exports` supersedes `main` and `module` for resolution, so a stale
+    /// `main` left beside it points at a file consumers cannot reach and must
+    /// not be followed. `bin` and `types` are not superseded: a command is an
+    /// entry however the package exports its modules, and a compiler still
+    /// reads `types` when no export condition names one.
     pub fn entry_paths(&self) -> Vec<String> {
         let mut paths = Vec::new();
-        for field in [
-            &self.main,
-            &self.module,
-            &self.browser,
-            &self.types,
-            &self.typings,
-            &self.bin,
-            &self.exports,
-        ] {
+        let module_entries: &[&Value] = if self.is_encapsulated() {
+            &[&self.exports]
+        } else {
+            &[&self.main, &self.module, &self.browser]
+        };
+        for field in module_entries.iter().copied().chain([&self.types, &self.typings, &self.bin]) {
             collect_paths(field, &mut paths);
         }
         paths

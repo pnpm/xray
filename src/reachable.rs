@@ -22,7 +22,10 @@ const EXTENSIONS: &[&str] =
 /// own code — and their dependencies belong to whoever runs them, not to
 /// whoever installs this.
 pub fn reachable_files(package_dir: &Path, manifest: &Manifest) -> BTreeSet<PathBuf> {
-    let mut queue: Vec<PathBuf> = entry_files(package_dir, manifest);
+    // Resolved paths are canonical, so the root has to be too for the
+    // containment check below to mean anything.
+    let root = package_dir.canonicalize().unwrap_or_else(|_| package_dir.to_path_buf());
+    let mut queue: Vec<PathBuf> = entry_files(&root, manifest);
     let mut seen = BTreeSet::new();
 
     while let Some(file) = queue.pop() {
@@ -43,8 +46,11 @@ pub fn reachable_files(package_dir: &Path, manifest: &Manifest) -> BTreeSet<Path
             if !specifier.starts_with('.') {
                 continue;
             }
-            if let Some(target) = resolve_relative(parent, &specifier) {
-                queue.push(target);
+            // `../../other-package/index.js` resolves to a real file whose
+            // imports belong to that package, not this one.
+            match resolve_relative(parent, &specifier) {
+                Some(target) if target.starts_with(&root) => queue.push(target),
+                _ => {}
             }
         }
     }
@@ -56,11 +62,13 @@ fn entry_files(package_dir: &Path, manifest: &Manifest) -> Vec<PathBuf> {
         .entry_paths()
         .iter()
         .filter_map(|path| resolve_relative(package_dir, path.trim_start_matches("./")))
+        .filter(|path| path.starts_with(package_dir))
         .collect();
 
-    // A package with no entry-point field at all is still importable through the
-    // name Node falls back to.
-    if entries.is_empty() {
+    // A package with no entry-point field is still importable through the name
+    // Node falls back to. One whose `exports` names nothing scannable is not:
+    // an unexported `index.js` beside it is exactly what the map excludes.
+    if entries.is_empty() && !manifest.is_encapsulated() {
         entries.extend(resolve_relative(package_dir, "index"));
     }
     entries

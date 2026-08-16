@@ -37,7 +37,7 @@ pub fn analyze(package_dir: &Path, scope: Scope) -> Result<Option<PackageReport>
     // without one, `require("pkg/anything")` resolves and every shipped file is
     // part of the surface — including the tests, whether the author meant that
     // or not.
-    let encapsulated = !manifest.exports.is_null();
+    let encapsulated = manifest.is_encapsulated();
     let files: Vec<PathBuf> = match scope {
         Scope::Declared if encapsulated => {
             reachable_files(package_dir, &manifest).into_iter().collect()

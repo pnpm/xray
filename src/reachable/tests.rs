@@ -110,3 +110,44 @@ fn an_entry_that_is_not_source_is_not_scanned() {
     write(&dir.join("index.js"), "module.exports = 1;\n");
     assert_eq!(names(&dir), ["index.js"]);
 }
+
+/// `exports` supersedes `main` for resolution, so a stale `main` beside it
+/// names a file consumers cannot reach.
+#[test]
+fn a_legacy_main_beside_exports_is_not_followed() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest("pkg", r#","main":"./old.js","exports":{".":"./new.js"}"#),
+    );
+    write(&dir.join("new.js"), "module.exports = 1;\n");
+    write(&dir.join("old.js"), "require('unreachable-ghost');\n");
+    assert_eq!(names(&dir), ["new.js"]);
+}
+
+/// An `exports` map naming nothing scannable excludes the `index.js` beside it,
+/// which is the whole point of publishing the map.
+#[test]
+fn an_exports_map_with_no_source_reaches_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest("pkg", r#","exports":{"./package.json":"./package.json"}"#),
+    );
+    write(&dir.join("index.js"), "require('unexported-ghost');\n");
+    assert!(names(&dir).is_empty());
+}
+
+/// A relative import can climb out of the package. The file it lands on is
+/// real, and its imports belong to whoever ships it.
+#[test]
+fn an_import_that_escapes_the_package_is_not_followed() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","exports":{".":"./index.js"}"#));
+    write(&dir.join("index.js"), "require('../neighbour/index.js');\n");
+    write(&root.path().join("neighbour/index.js"), "require('not-our-ghost');\n");
+    assert_eq!(names(&dir), ["index.js"]);
+}
