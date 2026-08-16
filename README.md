@@ -95,12 +95,26 @@ Findings come in two kinds:
   often a bundling artifact or an optional integration, so these deserve a look
   before you act on them.
 
+Three things reliably produce findings that are true of a file but not of the
+package: bundled output that still names the modules it inlined, generator
+templates describing what a *generated* project needs, and tests that ship in
+the tarball. Reading the origin and the severity together usually separates
+them.
+
 ## What it looks at
 
-Shipped `.d.ts`, `.d.mts` and `.d.cts` files, parsed with
+Every file a package ships as behaviour or as types — `.js`, `.mjs`, `.cjs`,
+`.jsx`, `.ts`, `.mts`, `.cts`, `.tsx` and the `.d.ts` family — parsed with
 [oxc](https://oxc.rs). Every position that names a module counts: `import` and
-`export … from`, `export *`, dynamic `import()`, type-position `import("pkg")`,
-`import x = require("pkg")`, and `/// <reference types="pkg" />`.
+`export … from`, `export *`, `require()` and `require.resolve()`, dynamic
+`import()`, type-position `import("pkg")`, `import x = require("pkg")`, and
+`/// <reference types="pkg" />`.
+
+Findings say where the reference was found. A dependency reached from executable
+code breaks the program when it is missing. One reached only from declarations
+breaks type checking instead — which is why no runtime detector can see it, and
+why Yarn's Plug'n'Play, which finds undeclared dependencies by failing at
+runtime, has no entry for most of them.
 
 Parsing rather than pattern matching is what keeps the results honest — a
 specifier mentioned in a JSDoc example is not a dependency, and a scanner built

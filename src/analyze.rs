@@ -5,28 +5,32 @@ use crate::{
     classify::missing_package,
     manifest::Manifest,
     report::{Finding, PackageReport, Severity},
-    scan,
+    scan::{self, Origin},
 };
 use anyhow::Result;
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     path::{Path, PathBuf},
 };
 use walkdir::WalkDir;
 
+/// Extensions worth reading: what the package ships as behaviour, and what it
+/// ships as types.
+const SCANNED_EXTENSIONS: &[&str] = &[".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx"];
+
 /// What one installed package reaches for but never declared, or `None` when it
-/// declared everything its declaration files name.
+/// declared everything its shipped files name.
 pub fn analyze(package_dir: &Path) -> Result<Option<PackageReport>> {
     let manifest = Manifest::read(package_dir)?;
     let declared: HashSet<&str> = manifest.reachable().collect();
 
-    let mut referenced = BTreeSet::new();
+    let mut referenced: BTreeSet<(scan::Requirement, Origin)> = BTreeSet::new();
     let mut unparsed = Vec::new();
-    for file in declaration_files(package_dir) {
+    for file in scannable_files(package_dir) {
         let Ok(source) = std::fs::read_to_string(&file) else {
             continue;
         };
-        match scan::specifiers(&source) {
+        match scan::specifiers(&source, &file) {
             Ok(found) => referenced.extend(found),
             Err(reason) => unparsed.push((file, reason)),
         }
@@ -35,12 +39,19 @@ pub fn analyze(package_dir: &Path) -> Result<Option<PackageReport>> {
         eprintln!("warning: could not parse {}: {reason}", file.display());
     }
 
-    let findings: Vec<Finding> = referenced
-        .iter()
-        .filter_map(|requirement| missing_package(requirement, &declared))
-        .collect::<BTreeSet<_>>()
+    // Classified per reference rather than per name: the same package can be
+    // satisfied in a type position by `@types/` and still be missing at run
+    // time, and it is the run-time reference that has to win.
+    let mut missing: BTreeMap<String, Origin> = BTreeMap::new();
+    for (requirement, origin) in &referenced {
+        if let Some(name) = missing_package(requirement, *origin, &declared) {
+            missing.entry(name).and_modify(|seen| *seen = seen.merged(*origin)).or_insert(*origin);
+        }
+    }
+
+    let findings: Vec<Finding> = missing
         .into_iter()
-        .map(|name| Finding {
+        .map(|(name, origin)| Finding {
             declared_range: manifest.dev_dependencies.get(&name).cloned(),
             severity: if manifest.dev_dependencies.contains_key(&name) {
                 Severity::DevDependency
@@ -48,6 +59,7 @@ pub fn analyze(package_dir: &Path) -> Result<Option<PackageReport>> {
                 Severity::Undeclared
             },
             dependency: name,
+            origin,
         })
         .collect();
 
@@ -57,9 +69,9 @@ pub fn analyze(package_dir: &Path) -> Result<Option<PackageReport>> {
     Ok(Some(PackageReport { package: manifest.id(), findings }))
 }
 
-/// The declaration files a package ships. Anything under a nested
-/// `node_modules` belongs to a bundled dependency, not to the package itself.
-pub fn declaration_files(package_dir: &Path) -> impl Iterator<Item = PathBuf> {
+/// The files a package ships. Anything under a nested `node_modules` belongs to
+/// a bundled dependency, not to the package itself.
+pub fn scannable_files(package_dir: &Path) -> impl Iterator<Item = PathBuf> {
     WalkDir::new(package_dir)
         .follow_links(false)
         .into_iter()
@@ -69,6 +81,6 @@ pub fn declaration_files(package_dir: &Path) -> impl Iterator<Item = PathBuf> {
         .map(walkdir::DirEntry::into_path)
         .filter(|path| {
             let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
-            name.ends_with(".d.ts") || name.ends_with(".d.mts") || name.ends_with(".d.cts")
+            SCANNED_EXTENSIONS.iter().any(|extension| name.ends_with(extension))
         })
 }

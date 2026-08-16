@@ -1,6 +1,6 @@
 use crate::{
     classify::{missing_package, package_name, types_package},
-    scan::Requirement,
+    scan::{Origin, Requirement},
 };
 use std::collections::HashSet;
 
@@ -49,19 +49,38 @@ fn maps_a_name_to_its_types_package() {
 #[test]
 fn an_import_is_satisfied_by_the_types_package_that_declares_it() {
     let requirement = Requirement::Module("estree".to_string());
-    assert_eq!(missing_package(&requirement, &declared(&["@types/estree"])), None);
-    assert_eq!(missing_package(&requirement, &declared(&[])), Some("estree".to_string()));
+    assert_eq!(missing_package(&requirement, Origin::Types, &declared(&["@types/estree"])), None);
+    assert_eq!(
+        missing_package(&requirement, Origin::Types, &declared(&[])),
+        Some("estree".to_string()),
+    );
 }
 
 #[test]
 fn a_types_reference_is_satisfied_by_either_spelling() {
     let requirement = Requirement::TypesReference("node".to_string());
-    assert_eq!(missing_package(&requirement, &declared(&["@types/node"])), None);
-    assert_eq!(missing_package(&requirement, &declared(&["node"])), None);
+    assert_eq!(missing_package(&requirement, Origin::Types, &declared(&["@types/node"])), None);
+    assert_eq!(missing_package(&requirement, Origin::Types, &declared(&["node"])), None);
 }
 
 #[test]
 fn an_unsatisfied_types_reference_is_reported_under_the_types_name() {
     let requirement = Requirement::TypesReference("estree".to_string());
-    assert_eq!(missing_package(&requirement, &declared(&[])), Some("@types/estree".to_string()));
+    assert_eq!(
+        missing_package(&requirement, Origin::Types, &declared(&[])),
+        Some("@types/estree".to_string()),
+    );
+}
+
+#[test]
+fn a_types_package_does_not_satisfy_a_runtime_reference() {
+    // `@types/lodash` carries no implementation, so requiring `lodash` at run
+    // time still needs `lodash` even though the type position was satisfied.
+    let requirement = Requirement::Module("lodash".to_string());
+    assert_eq!(missing_package(&requirement, Origin::Types, &declared(&["@types/lodash"])), None);
+    assert_eq!(
+        missing_package(&requirement, Origin::Runtime, &declared(&["@types/lodash"])),
+        Some("lodash".to_string()),
+    );
+    assert_eq!(missing_package(&requirement, Origin::Runtime, &declared(&["lodash"])), None);
 }
