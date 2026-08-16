@@ -3,7 +3,8 @@
 use crate::{
     analyze::{analyze, scannable_files},
     fixtures::global_virtual_store,
-    report::{Origin, Severity},
+    report::Severity,
+    scan::Origin,
 };
 
 #[test]

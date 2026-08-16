@@ -6,6 +6,7 @@ use oxc_ast::ast::{
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
 use oxc_span::SourceType;
+use serde::Serialize;
 use std::{collections::BTreeSet, path::Path};
 
 /// Every module specifier a file asks for.
@@ -17,17 +18,46 @@ use std::{collections::BTreeSet, path::Path};
 ///
 /// Returns `Err` when the file could not be parsed. Callers must report that
 /// rather than treat it as a file with nothing to find.
-pub fn specifiers(source: &str, path: &Path) -> Result<BTreeSet<Requirement>, String> {
+pub fn specifiers(source: &str, path: &Path) -> Result<BTreeSet<(Requirement, Origin)>, String> {
     let allocator = Allocator::default();
     let parsed = parse(&allocator, source, path)?;
 
-    let mut collector = Collector::default();
+    // Everything in a declaration file is erased; elsewhere only the positions
+    // TypeScript strips are.
+    let default_origin = if is_declaration(path) { Origin::Types } else { Origin::Runtime };
+    let mut collector = Collector { default_origin, found: BTreeSet::new() };
     collector.visit_program(&parsed);
     let mut found = collector.found;
     if is_declaration(path) {
-        found.extend(triple_slash_references(source).into_iter().map(Requirement::TypesReference));
+        found.extend(
+            triple_slash_references(source)
+                .into_iter()
+                .map(|name| (Requirement::TypesReference(name), Origin::Types)),
+        );
     }
     Ok(found)
+}
+
+/// Where a reference was found. A dependency reached from executable code
+/// breaks the program when it is missing; one reached only from erased
+/// positions breaks type checking instead, which no runtime detector can
+/// observe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Origin {
+    Runtime,
+    Types,
+    Both,
+}
+
+impl Origin {
+    pub fn merged(self, other: Self) -> Self {
+        if self == other {
+            self
+        } else {
+            Self::Both
+        }
+    }
 }
 
 /// Whether a path names a file that carries types rather than behaviour. The two
@@ -82,28 +112,47 @@ fn finish(parsed: oxc_parser::ParserReturn<'_>) -> Result<oxc_ast::ast::Program<
     Ok(parsed.program)
 }
 
-#[derive(Default)]
 struct Collector {
-    found: BTreeSet<Requirement>,
+    default_origin: Origin,
+    found: BTreeSet<(Requirement, Origin)>,
 }
 
 impl Collector {
     fn record(&mut self, specifier: &str) {
-        self.found.insert(Requirement::Module(specifier.to_string()));
+        let origin = self.default_origin;
+        self.found.insert((Requirement::Module(specifier.to_string()), origin));
+    }
+
+    /// A position TypeScript erases: it needs the package to type check and
+    /// never reaches it at run time, whatever kind of file it sits in.
+    fn record_type_only(&mut self, specifier: &str) {
+        self.found.insert((Requirement::Module(specifier.to_string()), Origin::Types));
     }
 }
 
 impl<'a> Visit<'a> for Collector {
     fn visit_import_declaration(&mut self, decl: &ImportDeclaration<'a>) {
-        self.record(decl.source.value.as_str());
+        if decl.import_kind.is_type() {
+            self.record_type_only(decl.source.value.as_str());
+        } else {
+            self.record(decl.source.value.as_str());
+        }
     }
 
     fn visit_export_from_declaration(&mut self, decl: &ExportFromDeclaration<'a>) {
-        self.record(decl.source.value.as_str());
+        if decl.export_kind.is_type() {
+            self.record_type_only(decl.source.value.as_str());
+        } else {
+            self.record(decl.source.value.as_str());
+        }
     }
 
     fn visit_export_all_declaration(&mut self, decl: &ExportAllDeclaration<'a>) {
-        self.record(decl.source.value.as_str());
+        if decl.export_kind.is_type() {
+            self.record_type_only(decl.source.value.as_str());
+        } else {
+            self.record(decl.source.value.as_str());
+        }
     }
 
     fn visit_import_expression(&mut self, expr: &ImportExpression<'a>) {
@@ -114,7 +163,7 @@ impl<'a> Visit<'a> for Collector {
     }
 
     fn visit_ts_import_type(&mut self, ty: &TSImportType<'a>) {
-        self.record(ty.source.value.as_str());
+        self.record_type_only(ty.source.value.as_str());
         walk::walk_ts_import_type(self, ty);
     }
 

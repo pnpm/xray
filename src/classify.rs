@@ -1,19 +1,25 @@
 #[cfg(test)]
 mod tests;
 
-use crate::scan::Requirement;
+use crate::scan::{Origin, Requirement};
 use std::collections::HashSet;
 
 /// The package that has to be installed for a requirement to resolve, or `None`
 /// when the package already declared something that satisfies it.
-pub fn missing_package(requirement: &Requirement, declared: &HashSet<&str>) -> Option<String> {
+pub fn missing_package(
+    requirement: &Requirement,
+    origin: Origin,
+    declared: &HashSet<&str>,
+) -> Option<String> {
     match requirement {
-        // A bare specifier can also be satisfied by a types package that declares
-        // the module ambiently, the way `@types/estree` declares `estree`.
+        // In a type position a bare specifier can be satisfied by a types
+        // package that declares the module ambiently, the way `@types/estree`
+        // declares `estree`. Executing code needs the package itself: a
+        // declaration file carries no implementation.
         Requirement::Module(specifier) => {
             let name = package_name(specifier)?;
-            let satisfied =
-                declared.contains(name) || declared.contains(types_package(name).as_str());
+            let satisfied = declared.contains(name)
+                || (origin == Origin::Types && declared.contains(types_package(name).as_str()));
             (!satisfied).then(|| name.to_string())
         }
         // `/// <reference types="x" />` is satisfied by `@types/x` or by `x`

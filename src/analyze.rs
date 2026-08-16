@@ -4,12 +4,12 @@ mod tests;
 use crate::{
     classify::missing_package,
     manifest::Manifest,
-    report::{Finding, Origin, PackageReport, Severity},
-    scan,
+    report::{Finding, PackageReport, Severity},
+    scan::{self, Origin},
 };
 use anyhow::Result;
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     path::{Path, PathBuf},
 };
 use walkdir::WalkDir;
@@ -24,22 +24,14 @@ pub fn analyze(package_dir: &Path) -> Result<Option<PackageReport>> {
     let manifest = Manifest::read(package_dir)?;
     let declared: HashSet<&str> = manifest.reachable().collect();
 
-    let mut referenced: BTreeMap<scan::Requirement, Origin> = BTreeMap::new();
+    let mut referenced: BTreeSet<(scan::Requirement, Origin)> = BTreeSet::new();
     let mut unparsed = Vec::new();
     for file in scannable_files(package_dir) {
         let Ok(source) = std::fs::read_to_string(&file) else {
             continue;
         };
-        let origin = if scan::is_declaration(&file) { Origin::Types } else { Origin::Runtime };
         match scan::specifiers(&source, &file) {
-            Ok(found) => {
-                for requirement in found {
-                    referenced
-                        .entry(requirement)
-                        .and_modify(|seen| *seen = seen.merged(origin))
-                        .or_insert(origin);
-                }
-            }
+            Ok(found) => referenced.extend(found),
             Err(reason) => unparsed.push((file, reason)),
         }
     }
@@ -47,9 +39,12 @@ pub fn analyze(package_dir: &Path) -> Result<Option<PackageReport>> {
         eprintln!("warning: could not parse {}: {reason}", file.display());
     }
 
+    // Classified per reference rather than per name: the same package can be
+    // satisfied in a type position by `@types/` and still be missing at run
+    // time, and it is the run-time reference that has to win.
     let mut missing: BTreeMap<String, Origin> = BTreeMap::new();
     for (requirement, origin) in &referenced {
-        if let Some(name) = missing_package(requirement, &declared) {
+        if let Some(name) = missing_package(requirement, *origin, &declared) {
             missing.entry(name).and_modify(|seen| *seen = seen.merged(*origin)).or_insert(*origin);
         }
     }

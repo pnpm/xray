@@ -1,8 +1,16 @@
-use crate::scan::{specifiers, Requirement};
+use crate::scan::{specifiers, Origin, Requirement};
 use std::path::Path;
 
 fn found(source: &str) -> Vec<Requirement> {
-    specifiers(source, Path::new("index.d.ts")).unwrap().into_iter().collect()
+    specifiers(source, Path::new("index.d.ts"))
+        .unwrap()
+        .into_iter()
+        .map(|(requirement, _)| requirement)
+        .collect()
+}
+
+fn origins(source: &str, name: &str) -> Vec<(Requirement, Origin)> {
+    specifiers(source, Path::new(name)).unwrap().into_iter().collect()
 }
 
 fn modules(source: &str) -> Vec<String> {
@@ -66,7 +74,7 @@ fn script(source: &str, name: &str) -> Vec<String> {
     specifiers(source, Path::new(name))
         .unwrap()
         .into_iter()
-        .filter_map(|requirement| match requirement {
+        .filter_map(|(requirement, _origin)| match requirement {
             Requirement::Module(specifier) => Some(specifier),
             Requirement::TypesReference(_) => None,
         })
@@ -117,4 +125,38 @@ export default x;";
 fn triple_slash_references_are_only_read_from_declarations() {
     let source = "/// <reference types=\"node\" />\nmodule.exports = {};\n";
     assert!(specifiers(source, Path::new("index.js")).unwrap().is_empty());
+}
+
+#[test]
+fn erased_positions_are_type_only_wherever_they_appear() {
+    let source = r"
+        import type { A } from 'type-import';
+        export type { B } from 'type-export';
+        import { C } from 'value-import';
+        declare const d: import('type-position').D;
+    ";
+    let by_name: Vec<_> = origins(source, "index.ts")
+        .into_iter()
+        .filter_map(|(requirement, origin)| match requirement {
+            Requirement::Module(specifier) => Some((specifier, origin)),
+            Requirement::TypesReference(_) => None,
+        })
+        .collect();
+    assert_eq!(
+        by_name,
+        [
+            ("type-export".to_string(), Origin::Types),
+            ("type-import".to_string(), Origin::Types),
+            ("type-position".to_string(), Origin::Types),
+            ("value-import".to_string(), Origin::Runtime),
+        ],
+    );
+}
+
+#[test]
+fn everything_in_a_declaration_file_is_type_only() {
+    let source = r"import { A } from 'value-looking-import';
+export { A };";
+    let origins = origins(source, "index.d.ts");
+    assert!(origins.iter().all(|(_, origin)| *origin == Origin::Types), "{origins:?}");
 }

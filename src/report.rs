@@ -1,3 +1,4 @@
+use crate::scan::Origin;
 use anyhow::Result;
 use serde::Serialize;
 use std::fmt::Write as _;
@@ -19,27 +20,6 @@ pub struct Finding {
     pub declared_range: Option<String>,
     pub severity: Severity,
     pub origin: Origin,
-}
-
-/// Where the reference was found. A dependency reached from executable code
-/// breaks the program when it is missing; one reached only from declarations
-/// breaks type checking, which no runtime detector can observe.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Origin {
-    Runtime,
-    Types,
-    Both,
-}
-
-impl Origin {
-    pub fn merged(self, other: Self) -> Self {
-        if self == other {
-            self
-        } else {
-            Self::Both
-        }
-    }
 }
 
 /// A dependency the package build-depends on but ships references to is a far
