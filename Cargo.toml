@@ -1,0 +1,23 @@
+[package]
+name = "pnpm-xray"
+version = "0.1.0"
+edition = "2021"
+description = "See inside the packages you installed: find dependencies they use but never declared"
+license = "MIT"
+repository = "https://github.com/pnpm/xray"
+
+[[bin]]
+name = "xray"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+oxc_allocator = "0.144.0"
+oxc_ast = "0.144.0"
+oxc_ast_visit = "0.144.0"
+oxc_parser = "0.144.0"
+oxc_span = "0.144.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"

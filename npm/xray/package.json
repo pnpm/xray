@@ -1,0 +1,41 @@
+{
+  "name": "@pnpm/xray",
+  "version": "0.1.0",
+  "description": "See inside the packages you installed: find dependencies they use but never declared",
+  "keywords": [
+    "pnpm",
+    "dependencies",
+    "phantom dependencies",
+    "package manager"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/pnpm/xray",
+  "bugs": "https://github.com/pnpm/xray/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pnpm/xray",
+    "directory": "npm/xray"
+  },
+  "type": "module",
+  "bin": {
+    "xray": "bin/xray.mjs"
+  },
+  "engines": {
+    "node": ">=18.*"
+  },
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "optionalDependencies": {
+    "@pnpm/xray.win32-x64": "0.1.0",
+    "@pnpm/xray.win32-arm64": "0.1.0",
+    "@pnpm/xray.darwin-x64": "0.1.0",
+    "@pnpm/xray.darwin-arm64": "0.1.0",
+    "@pnpm/xray.linux-x64": "0.1.0",
+    "@pnpm/xray.linux-arm64": "0.1.0",
+    "@pnpm/xray.linux-x64-musl": "0.1.0",
+    "@pnpm/xray.linux-arm64-musl": "0.1.0"
+  }
+}

@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: npm dist-tag to publish under
+        default: latest
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            packageTarget: win32-x64
+            runner: windows-latest
+          - target: aarch64-pc-windows-msvc
+            packageTarget: win32-arm64
+            runner: windows-11-arm
+          - target: x86_64-apple-darwin
+            packageTarget: darwin-x64
+            runner: macos-15-intel
+          - target: aarch64-apple-darwin
+            packageTarget: darwin-arm64
+            runner: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            packageTarget: linux-x64
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            packageTarget: linux-arm64
+            runner: ubuntu-24.04-arm
+          - target: x86_64-unknown-linux-musl
+            packageTarget: linux-x64-musl
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            packageTarget: linux-arm64-musl
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install musl toolchain
+        if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Stage the executable under its package target name
+        shell: bash
+        run: |
+          if [[ "${{ matrix.packageTarget }}" == win32-* ]]; then
+            cp "target/${{ matrix.target }}/release/xray.exe" "xray.${{ matrix.packageTarget }}.exe"
+          else
+            cp "target/${{ matrix.target }}/release/xray" "xray.${{ matrix.packageTarget }}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xray.${{ matrix.packageTarget }}
+          path: xray.${{ matrix.packageTarget }}*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Trusted publishing to npm signs the release with the workflow's identity,
+    # so no long-lived token is stored anywhere.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v5
+        with:
+          merge-multiple: true
+      - run: node scripts/generate-packages.mjs
+      # The wrapper depends on the platform packages, so publishing it first
+      # would leave a version on the registry that cannot resolve a binary.
+      - name: Publish the platform packages
+        run: |
+          for dir in npm/xray.*; do
+            npm publish "$dir" --access public --provenance --tag "${{ inputs.tag }}"
+          done
+        env:
+          # Trusted publishing cannot be configured for a package that does not
+          # exist yet, so the first release of each package needs the token.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish the wrapper
+        run: npm publish npm/xray --access public --provenance --tag "${{ inputs.tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
