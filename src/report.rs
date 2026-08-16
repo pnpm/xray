@@ -18,6 +18,28 @@ pub struct Finding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub declared_range: Option<String>,
     pub severity: Severity,
+    pub origin: Origin,
+}
+
+/// Where the reference was found. A dependency reached from executable code
+/// breaks the program when it is missing; one reached only from declarations
+/// breaks type checking, which no runtime detector can observe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Origin {
+    Runtime,
+    Types,
+    Both,
+}
+
+impl Origin {
+    pub fn merged(self, other: Self) -> Self {
+        if self == other {
+            self
+        } else {
+            Self::Both
+        }
+    }
 }
 
 /// A dependency the package build-depends on but ships references to is a far
@@ -36,7 +58,7 @@ pub fn as_json(reports: &[PackageReport]) -> Result<String> {
 
 pub fn as_text(reports: &[PackageReport]) -> String {
     if reports.is_empty() {
-        return "No undeclared dependencies found in shipped declaration files.\n".to_string();
+        return "No undeclared dependencies found in shipped files.\n".to_string();
     }
 
     let mut out = String::new();
@@ -47,7 +69,12 @@ pub fn as_text(reports: &[PackageReport]) -> String {
                 Severity::DevDependency => "declared as a devDependency",
                 Severity::Undeclared => "not in the manifest at all",
             };
-            let _ = writeln!(out, "  {} — {note}", finding.dependency);
+            let where_from = match finding.origin {
+                Origin::Runtime => "code",
+                Origin::Types => "types",
+                Origin::Both => "code and types",
+            };
+            let _ = writeln!(out, "  {} — {note}, used in {where_from}", finding.dependency);
         }
         out.push('\n');
     }

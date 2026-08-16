@@ -13,8 +13,9 @@ pub fn manifest(name: &str, extra: &str) -> String {
 /// store produces: `node_modules` holds links, and each store entry holds the
 /// package next to the dependencies it may reach.
 ///
-/// `app` leaks a devDependency into its declarations and bundles a copy of
-/// something else; `helper` declares the dependency it imports.
+/// `app` leaks one devDependency into its declarations and requires another
+/// from executable code, and bundles a copy of something else; `helper`
+/// declares the dependency it imports.
 #[cfg(unix)]
 pub fn global_virtual_store() -> tempfile::TempDir {
     use std::os::unix::fs::symlink;
@@ -24,8 +25,12 @@ pub fn global_virtual_store() -> tempfile::TempDir {
     let store = root.path().join("store");
 
     let app = store.join("app/node_modules/app");
-    write(&app.join("package.json"), &manifest("app", r#","devDependencies":{"ghost":"^1"}"#));
+    write(
+        &app.join("package.json"),
+        &manifest("app", r#","devDependencies":{"ghost":"^1","runtime-ghost":"^3"}"#),
+    );
     write(&app.join("index.d.ts"), "import type { G } from 'ghost';\nexport type { G };\n");
+    write(&app.join("index.js"), "const r = require('runtime-ghost');\nmodule.exports = r;\n");
     write(&app.join("node_modules/vendored/index.d.ts"), "import 'not-yours';\n");
 
     let helper = store.join("helper/node_modules/helper");

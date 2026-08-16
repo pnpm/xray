@@ -1,4 +1,4 @@
-use crate::report::{as_package_extensions, as_text, Finding, PackageReport, Severity};
+use crate::report::{as_package_extensions, as_text, Finding, Origin, PackageReport, Severity};
 use yaml_rust2::YamlLoader;
 
 fn medplum() -> Vec<PackageReport> {
@@ -8,6 +8,7 @@ fn medplum() -> Vec<PackageReport> {
             dependency: "@medplum/fhirtypes".to_string(),
             declared_range: Some("5.1.15".to_string()),
             severity: Severity::DevDependency,
+            origin: Origin::Types,
         }],
     }]
 }
@@ -62,15 +63,17 @@ fn text_separates_the_two_kinds_of_finding() {
                 dependency: "known".to_string(),
                 declared_range: Some("^1".to_string()),
                 severity: Severity::DevDependency,
+                origin: Origin::Types,
             },
             Finding {
                 dependency: "unknown".to_string(),
                 declared_range: None,
                 severity: Severity::Undeclared,
+                origin: Origin::Runtime,
             },
         ],
     }];
     let rendered = as_text(&reports);
-    assert!(rendered.contains("known — declared as a devDependency"), "{rendered}");
-    assert!(rendered.contains("unknown — not in the manifest at all"), "{rendered}");
+    assert!(rendered.contains("known — declared as a devDependency, used in types"), "{rendered}");
+    assert!(rendered.contains("unknown — not in the manifest at all, used in code"), "{rendered}");
 }
