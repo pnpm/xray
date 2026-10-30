@@ -20,9 +20,9 @@ pub struct Manifest {
     pub peer_dependencies: DepMap,
     #[serde(default)]
     pub optional_dependencies: DepMap,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_bundled")]
     pub bundle_dependencies: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_bundled")]
     pub bundled_dependencies: Vec<String>,
     /// Entry-point fields, kept as raw JSON because each one is a string in some
     /// packages and a nested map of conditions or subpaths in others. Only the
@@ -41,6 +41,25 @@ pub struct Manifest {
     pub bin: Value,
     #[serde(default)]
     pub exports: Value,
+}
+
+// npm also accepts `bundleDependencies: true`, meaning all dependencies are
+// bundled, and `false`, meaning none are. Both are already accounted for by
+// the dependency maps; only an explicit list contributes additional names.
+fn deserialize_bundled<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Bundled {
+        Names(Vec<String>),
+        Flag(bool),
+    }
+    match Bundled::deserialize(deserializer)? {
+        Bundled::Names(names) => Ok(names),
+        Bundled::Flag(_flag) => Ok(Vec::new()),
+    }
 }
 
 impl Manifest {

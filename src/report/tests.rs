@@ -18,7 +18,7 @@ fn package_extensions_declare_an_optional_peer() {
     assert_eq!(
         as_package_extensions(&medplum()),
         "packageExtensions:\n  \
-         '@medplum/core':\n    \
+         '@medplum/core@5.1.15':\n    \
          peerDependencies:\n      \
          '@medplum/fhirtypes': '*'\n    \
          peerDependenciesMeta:\n      \
@@ -33,7 +33,7 @@ fn package_extensions_declare_an_optional_peer() {
 fn package_extensions_parse_as_yaml() {
     let rendered = as_package_extensions(&medplum());
     let parsed = YamlLoader::load_from_str(&rendered).expect("emitted invalid YAML");
-    let extensions = &parsed[0]["packageExtensions"]["@medplum/core"];
+    let extensions = &parsed[0]["packageExtensions"]["@medplum/core@5.1.15"];
     assert_eq!(extensions["peerDependencies"]["@medplum/fhirtypes"].as_str(), Some("*"));
     assert_eq!(
         extensions["peerDependenciesMeta"]["@medplum/fhirtypes"]["optional"].as_bool(),
@@ -42,10 +42,38 @@ fn package_extensions_parse_as_yaml() {
 }
 
 #[test]
-fn the_version_is_stripped_from_a_scoped_package() {
-    let rendered = as_package_extensions(&medplum());
-    assert!(rendered.contains("'@medplum/core':"), "{rendered}");
-    assert!(!rendered.contains("5.1.15'"), "{rendered}");
+fn versions_are_separate_and_repeated_peer_contexts_are_merged() {
+    let mut reports = medplum();
+    reports.push(PackageReport {
+        package: "@medplum/core@5.1.15".into(),
+        findings: vec![Finding {
+            dependency: "another".into(),
+            declared_range: None,
+            severity: Severity::Undeclared,
+            origin: Origin::Runtime,
+        }],
+    });
+    reports.push(PackageReport {
+        package: "@medplum/core@6.0.0".into(),
+        findings: vec![Finding {
+            dependency: "third".into(),
+            declared_range: None,
+            severity: Severity::Undeclared,
+            origin: Origin::Runtime,
+        }],
+    });
+    let rendered = as_package_extensions(&reports);
+    let parsed = YamlLoader::load_from_str(&rendered).expect("valid YAML");
+    let extensions = &parsed[0]["packageExtensions"];
+    assert_eq!(
+        extensions["@medplum/core@5.1.15"]["peerDependencies"]["another"].as_str(),
+        Some("*")
+    );
+    assert_eq!(
+        extensions["@medplum/core@5.1.15"]["peerDependencies"]["@medplum/fhirtypes"].as_str(),
+        Some("*")
+    );
+    assert_eq!(extensions["@medplum/core@6.0.0"]["peerDependencies"]["third"].as_str(), Some("*"));
 }
 
 #[test]

@@ -77,3 +77,24 @@ fn a_package_without_exports_has_no_unreachable_files() {
     let names: Vec<_> = report.findings.iter().map(|f| f.dependency.as_str()).collect();
     assert_eq!(names, ["only-in-tests"]);
 }
+
+#[test]
+fn boolean_bundle_dependencies_does_not_prevent_analysis() {
+    use crate::fixtures::{manifest, write};
+
+    for flag in ["true", "false"] {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("pkg");
+        write(
+            &dir.join("package.json"),
+            &manifest(
+                "pkg",
+                &format!(r#","bundleDependencies":{flag},"dependencies":{{"declared":"1"}}"#),
+            ),
+        );
+        write(&dir.join("index.js"), "require('declared'); require('missing');");
+        let report = analyze(&dir, Scope::Declared).unwrap().unwrap();
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].dependency, "missing");
+    }
+}

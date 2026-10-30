@@ -6,6 +6,7 @@ use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
 };
+use walkdir::WalkDir;
 
 /// Tried in turn against a specifier that named no file directly. `.d.ts` comes
 /// before `.ts` so a package shipping both resolves to the declarations, which
@@ -61,7 +62,7 @@ fn entry_files(package_dir: &Path, manifest: &Manifest) -> Vec<PathBuf> {
     let mut entries: Vec<PathBuf> = manifest
         .entry_paths()
         .iter()
-        .filter_map(|path| resolve_relative(package_dir, path.trim_start_matches("./")))
+        .flat_map(|path| expand_entry(package_dir, path.trim_start_matches("./")))
         .filter(|path| path.starts_with(package_dir))
         .collect();
 
@@ -72,6 +73,34 @@ fn entry_files(package_dir: &Path, manifest: &Manifest) -> Vec<PathBuf> {
         entries.extend(resolve_relative(package_dir, "index"));
     }
     entries
+}
+
+/// Export patterns substitute the same `*` with a subpath, including slashes.
+/// Enumerating shipped files makes these entries visible without following
+/// symlinks into other packages or scanning nested bundled dependencies.
+fn expand_entry(root: &Path, pattern: &str) -> Vec<PathBuf> {
+    let Some((prefix, suffix)) = pattern.split_once('*') else {
+        return resolve_relative(root, pattern).into_iter().collect();
+    };
+    if suffix.contains('*') || pattern.starts_with('/') {
+        return Vec::new();
+    }
+    WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| entry.file_name() != "node_modules")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file() && scan::is_scannable(entry.path()))
+        .filter_map(|entry| {
+            let relative = entry.path().strip_prefix(root).ok()?.to_str()?.replace('\\', "/");
+            let middle = relative.strip_prefix(prefix)?.strip_suffix(suffix)?;
+            // Node substitutes the same value for each star in a target.
+            if middle.is_empty() {
+                return None;
+            }
+            existing_file(entry.path())
+        })
+        .collect()
 }
 
 /// Node's file lookup, narrowed to what a published package needs: the path as

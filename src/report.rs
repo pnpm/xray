@@ -1,7 +1,10 @@
 use crate::scan::Origin;
 use anyhow::Result;
 use serde::Serialize;
-use std::fmt::Write as _;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
+};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,17 +71,29 @@ pub fn as_package_extensions(reports: &[PackageReport]) -> String {
         return String::new();
     }
 
-    let mut out = String::from("packageExtensions:\n");
+    // The same version can occur more than once with different peer contexts.
+    // Merge those reports, and keep versions separate so a fix for one release
+    // does not silently change every other release of the package.
+    let mut extensions: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for report in reports {
-        let (name, _) = report.package.rsplit_once('@').unwrap_or((&report.package, ""));
-        let _ = writeln!(out, "  '{name}':");
+        extensions
+            .entry(&report.package)
+            .or_default()
+            .extend(report.findings.iter().map(|finding| finding.dependency.as_str()));
+    }
+    let mut out = String::from("packageExtensions:\n");
+    for (package, dependencies) in extensions {
+        let package = package.replace('\'', "''");
+        let _ = writeln!(out, "  '{package}':");
         let _ = writeln!(out, "    peerDependencies:");
-        for finding in &report.findings {
-            let _ = writeln!(out, "      '{}': '*'", finding.dependency);
+        for dependency in &dependencies {
+            let dependency = dependency.replace('\'', "''");
+            let _ = writeln!(out, "      '{dependency}': '*'");
         }
         let _ = writeln!(out, "    peerDependenciesMeta:");
-        for finding in &report.findings {
-            let _ = writeln!(out, "      '{}':", finding.dependency);
+        for dependency in &dependencies {
+            let dependency = dependency.replace('\'', "''");
+            let _ = writeln!(out, "      '{dependency}':");
             let _ = writeln!(out, "        optional: true");
         }
     }

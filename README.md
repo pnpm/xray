@@ -67,7 +67,7 @@ xray --package-extensions
 
 ```yaml
 packageExtensions:
-  '@medplum/core':
+  '@medplum/core@5.1.15':
     peerDependencies:
       '@medplum/fhirtypes': '*'
     peerDependenciesMeta:
@@ -79,7 +79,13 @@ Adding that to `pnpm-workspace.yaml` makes pnpm link the dependency inside the
 package's own directory, so it resolves for every tool — the compiler, bundlers
 and Node alike — rather than only for the ones that read `tsconfig.json`.
 
-The range is `'*'` on purpose. The goal is to make a package that is already
+The selector is pinned to the affected package version. Findings from multiple
+installations of that version are combined. Review the suggestions: an optional
+peer links a dependency only when it is already available; it does not install
+one. Some references are optional integrations or build artifacts and need no
+extension.
+
+The peer range is `'*'` on purpose. The goal is to make a package that is already
 installed reachable, not to constrain which version gets picked; a narrower range
 would only produce unmet-peer warnings without preventing anything.
 

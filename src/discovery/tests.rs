@@ -17,3 +17,16 @@ fn a_project_with_nothing_installed_says_so() {
     let error = installed_packages(root.path()).unwrap_err().to_string();
     assert!(error.contains("no installed dependencies"), "{error}");
 }
+
+#[test]
+fn discovers_nested_node_modules() {
+    let root = tempfile::tempdir().unwrap();
+    let parent = root.path().join("node_modules/parent");
+    let child = parent.join("node_modules/child");
+    std::fs::create_dir_all(&child).unwrap();
+    std::fs::write(parent.join("package.json"), "{}").unwrap();
+    std::fs::write(child.join("package.json"), "{}").unwrap();
+    let found = installed_packages(root.path()).unwrap();
+    assert!(found.contains(&parent.canonicalize().unwrap()));
+    assert!(found.contains(&child.canonicalize().unwrap()));
+}

@@ -35,6 +35,9 @@ pub fn installed_packages(root: &Path) -> Result<Vec<PathBuf>> {
             if !real.join("package.json").is_file() {
                 continue;
             }
+            // npm and other layouts can put dependencies inside the package
+            // itself rather than next to it in a virtual-store entry.
+            queue.push(real.join("node_modules"));
             if let Some(modules_dir) = nearest_modules_dir(&real) {
                 queue.push(modules_dir);
             }

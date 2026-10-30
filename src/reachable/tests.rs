@@ -71,6 +71,23 @@ fn every_string_under_exports_is_an_entry() {
     assert_eq!(found, ["cjs.cjs", "esm.mjs"]);
 }
 
+#[test]
+fn export_patterns_include_nested_matching_files() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","exports":{"./*":"./dist/*.js"}"#));
+    write(&dir.join("dist/first.js"), "require('missing-one');");
+    write(&dir.join("dist/nested/second.js"), "require('missing-two');");
+    write(&dir.join("dist/ignored.ts"), "import 'not-exported';");
+    write(&dir.join("node_modules/bundled/dist/third.js"), "require('not-ours');");
+    assert_eq!(names(&dir), ["dist/first.js", "dist/nested/second.js"]);
+    let report = crate::analyze::analyze(&dir, crate::analyze::Scope::Declared).unwrap().unwrap();
+    assert_eq!(
+        report.findings.iter().map(|f| f.dependency.as_str()).collect::<Vec<_>>(),
+        ["missing-one", "missing-two"]
+    );
+}
+
 /// Two files importing each other is ordinary, and it used to walk forever:
 /// joining `./a` onto a directory keeps the `.`, so the same file arrived under
 /// a new path each lap and the visited set never recognised it. The walk ate
