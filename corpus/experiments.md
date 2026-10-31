@@ -79,3 +79,31 @@ from `packages/kit` under the global store. These focused tests revealed no
 failure; they do not establish that all workspace packages or integrations work.
 A root Vitest run also included build-fixture tests whose generated artifacts
 were absent, so its failures are not evidence of broken registry packages.
+
+## Astro: focused tests pass in both layouts
+
+At `withastro/astro` commit `10dae2f31486cc0a6a04d1f3d7f5ab7fa8889b30`,
+pnpm 11.28.4 installed 577 workspace projects with scripts disabled and
+hoisting disabled. The checkout needed generated workspace build artifacts before
+its tests could run. From the repository root, the preparation was:
+
+```sh
+(cd packages/astro && node_modules/.bin/astro-scripts prebuild --to-string 'src/runtime/server/astro-island.ts' 'src/runtime/client/{idle,load,media,only,visible}.ts' && node_modules/.bin/astro-scripts build 'src/**/*.{ts,js}' --copy-wasm)
+node_modules/.bin/turbo run build:ci --filter='astro^...'
+(cd packages/integrations/preact && node_modules/.bin/astro-scripts build 'src/**/*.ts')
+```
+
+Turbo's nested pnpm commands warned that their automatic verification install
+could not remove the modules directory without a terminal; the build tasks still
+reported success. From `packages/astro`, the focused test command was:
+
+```sh
+node_modules/.bin/astro-scripts test 'test/units/**/*.test.ts' --strip-types --teardown ./test/units/teardown.ts
+```
+
+It passed 3,773 tests with one skipped. After reinstalling with
+`--config.enable-global-virtual-store=true` (and
+`--config.confirm-modules-purge=false` for this disposable checkout), the same
+test command passed with the same counts. The root Vitest symlink resolved into
+the global store's `links` directory. These tests did not expose a further
+registry-package failure; integration and browser suites were not run.
