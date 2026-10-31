@@ -39,10 +39,15 @@ pub fn specifiers(source: &str, path: &Path) -> Result<BTreeSet<(Requirement, Or
     // TypeScript strips are.
     let default_origin = if is_declaration(path) { Origin::Types } else { Origin::Runtime };
     let semantic = SemanticBuilder::new_compiler().build(&parsed).semantic;
-    let mut factories = RequireFactories::default();
+    let mut factories = RequireFactories {
+        named: BTreeSet::new(),
+        namespaces: BTreeSet::new(),
+        scoping: semantic.scoping(),
+    };
     factories.visit_program(&parsed);
     let mut require_bindings = RequireBindings {
-        factories: factories.0,
+        factories: factories.named,
+        namespaces: factories.namespaces,
         scoping: semantic.scoping(),
         bindings: BTreeSet::new(),
     };
@@ -272,20 +277,36 @@ fn is_require(
     }
 }
 
-#[derive(Default)]
-struct RequireFactories(BTreeSet<SymbolId>);
+struct RequireFactories<'a> {
+    named: BTreeSet<SymbolId>,
+    namespaces: BTreeSet<SymbolId>,
+    scoping: &'a Scoping,
+}
 
-impl<'a> Visit<'a> for RequireFactories {
+impl<'a> Visit<'a> for RequireFactories<'_> {
     fn visit_import_declaration(&mut self, decl: &ImportDeclaration<'a>) {
         if matches!(decl.source.value.as_str(), "module" | "node:module") {
             if let Some(specifiers) = &decl.specifiers {
                 for specifier in specifiers {
-                    if let ImportDeclarationSpecifier::ImportSpecifier(specifier) = specifier {
-                        if specifier.imported.name() == "createRequire" {
+                    match specifier {
+                        ImportDeclarationSpecifier::ImportSpecifier(specifier)
+                            if specifier.imported.name() == "createRequire" =>
+                        {
                             if let Some(id) = specifier.local.symbol_id.get() {
-                                self.0.insert(id);
+                                self.named.insert(id);
                             }
                         }
+                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(specifier) => {
+                            if let Some(id) = specifier.local.symbol_id.get() {
+                                self.namespaces.insert(id);
+                            }
+                        }
+                        ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) => {
+                            if let Some(id) = specifier.local.symbol_id.get() {
+                                self.namespaces.insert(id);
+                            }
+                        }
+                        ImportDeclarationSpecifier::ImportSpecifier(_) => {}
                     }
                 }
             }
@@ -297,18 +318,27 @@ impl<'a> Visit<'a> for RequireFactories {
         if let (BindingPattern::ObjectPattern(pattern), Some(Expression::CallExpression(call))) =
             (&decl.id, &decl.init)
         {
-            if matches!(&call.callee, Expression::Identifier(name) if name.name == "require")
-                && matches!(call.arguments.first(), Some(Argument::StringLiteral(name)) if matches!(name.value.as_str(), "module" | "node:module"))
-            {
+            if is_node_module_load(call, self.scoping) {
                 for property in &pattern.properties {
                     if matches!(&property.key, PropertyKey::StaticIdentifier(name) if name.name == "createRequire")
                     {
                         if let BindingPattern::BindingIdentifier(binding) = &property.value {
                             if let Some(id) = binding.symbol_id.get() {
-                                self.0.insert(id);
+                                self.named.insert(id);
                             }
                         }
                     }
+                }
+            }
+        }
+        if let (
+            BindingPattern::BindingIdentifier(binding),
+            Some(Expression::CallExpression(call)),
+        ) = (&decl.id, &decl.init)
+        {
+            if is_node_module_load(call, self.scoping) {
+                if let Some(id) = binding.symbol_id.get() {
+                    self.namespaces.insert(id);
                 }
             }
         }
@@ -318,6 +348,7 @@ impl<'a> Visit<'a> for RequireFactories {
 
 struct RequireBindings<'a> {
     factories: BTreeSet<SymbolId>,
+    namespaces: BTreeSet<SymbolId>,
     scoping: &'a Scoping,
     bindings: BTreeSet<SymbolId>,
 }
@@ -334,9 +365,20 @@ impl<'a> Visit<'a> for RequireBindings<'_> {
                     .reference_id
                     .get()
                     .and_then(|id| self.scoping.get_reference(id).symbol_id())
-                    .map_or(name.name == "createRequire", |id| self.factories.contains(&id)),
+                    .is_some_and(|id| self.factories.contains(&id)),
                 Expression::StaticMemberExpression(member) => {
                     member.property.name == "createRequire"
+                        && match &member.object {
+                            Expression::Identifier(name) => name
+                                .reference_id
+                                .get()
+                                .and_then(|id| self.scoping.get_reference(id).symbol_id())
+                                .is_some_and(|id| self.namespaces.contains(&id)),
+                            Expression::CallExpression(call) => {
+                                is_node_module_load(call, self.scoping)
+                            }
+                            _ => false,
+                        }
                 }
                 _ => false,
             };
@@ -348,6 +390,12 @@ impl<'a> Visit<'a> for RequireBindings<'_> {
         }
         walk::walk_variable_declarator(self, decl);
     }
+}
+
+fn is_node_module_load(call: &CallExpression<'_>, scoping: &Scoping) -> bool {
+    matches!(&call.callee, Expression::Identifier(_))
+        && is_require(&call.callee, scoping, &BTreeSet::new())
+        && matches!(call.arguments.first(), Some(Argument::StringLiteral(name)) if matches!(name.value.as_str(), "module" | "node:module"))
 }
 
 fn triple_slash_references(program: &Program<'_>) -> Vec<String> {

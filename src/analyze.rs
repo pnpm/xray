@@ -51,7 +51,21 @@ pub fn analyze(package_dir: &Path, scope: Scope) -> Result<Option<PackageReport>
         let source = std::fs::read_to_string(&file)
             .with_context(|| format!("reading source {}", file.display()))?;
         match scan::specifiers(&source, &file) {
-            Ok(found) => referenced.extend(found),
+            Ok(found) => {
+                for (requirement, origin) in found {
+                    if let scan::Requirement::Module(specifier) = &requirement {
+                        if specifier.starts_with('#') {
+                            referenced.extend(
+                                manifest
+                                    .import_targets(specifier)
+                                    .into_iter()
+                                    .map(|target| (scan::Requirement::Module(target), origin)),
+                            );
+                        }
+                    }
+                    referenced.insert((requirement, origin));
+                }
+            }
             Err(reason) => unparsed.push((file, reason)),
         }
     }

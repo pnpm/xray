@@ -30,3 +30,19 @@ fn discovers_nested_node_modules() {
     assert!(found.contains(&parent.canonicalize().unwrap()));
     assert!(found.contains(&child.canonicalize().unwrap()));
 }
+
+#[test]
+fn discovers_dependencies_used_only_by_workspace_importers() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("node_modules")).unwrap();
+    let dependency = root.path().join("packages/member/node_modules/helper");
+    std::fs::create_dir_all(&dependency).unwrap();
+    std::fs::write(dependency.join("package.json"), "{}").unwrap();
+    std::fs::write(
+        root.path().join("pnpm-lock.yaml"),
+        "importers:\n  .: {}\n  packages/member: {}\n",
+    )
+    .unwrap();
+    let found = installed_packages(root.path()).unwrap();
+    assert_eq!(found, vec![dependency.canonicalize().unwrap()]);
+}

@@ -100,6 +100,31 @@ fn boolean_bundle_dependencies_does_not_prevent_analysis() {
 }
 
 #[test]
+fn imports_map_targets_are_followed_and_external_dependencies_reported() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest(
+            "pkg",
+            r##","exports":"./index.js","imports":{"#feature/*":{"node":"./lib/*.js","default":"fallback/*"},"#feature/hidden":null,"#unused":"unused-package"},"devDependencies":{"fallback":"^2"}"##,
+        ),
+    );
+    write(&dir.join("index.js"), "require('#feature/active'); require('#feature/hidden');");
+    write(&dir.join("lib/active.js"), "require('nested-missing');");
+    write(&dir.join("lib/hidden.js"), "require('hidden-missing');");
+    let report = analyze(&dir, Scope::Declared).unwrap().unwrap();
+    let findings: Vec<_> = report
+        .findings
+        .iter()
+        .map(|finding| (finding.dependency.as_str(), finding.origin))
+        .collect();
+    assert_eq!(findings, [("fallback", Origin::Runtime), ("nested-missing", Origin::Runtime)]);
+    assert_eq!(report.findings[0].declared_range.as_deref(), Some("^2"));
+}
+
+#[test]
 fn unreadable_source_cannot_be_reported_as_clean() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("package.json"), r#"{"name":"example","version":"1.0.0"}"#)

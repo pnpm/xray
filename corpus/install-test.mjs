@@ -34,6 +34,10 @@ try {
     await writeFile(join(app, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'es2022', module: 'nodenext', moduleResolution: 'nodenext', noEmit: true }, include: ['index.ts', 'types.d.ts'] }))
     checked('pnpm', ['install', '--ignore-scripts'], root)
     const core = join(app, 'node_modules/@medplum/core')
+    const reports = JSON.parse(checked(binary, ['--json', root], root))
+    if (!reports.some((report) => report.package === '@medplum/core@5.2.13' && report.findings.some((finding) => finding.dependency === '@medplum/fhirtypes'))) {
+      throw new Error(`${label}: root project scan missed @medplum/core in the workspace`)
+    }
     const actual = await realpath(core)
     const outsideRoot = relative(root, actual).startsWith('..')
     if (outsideRoot !== globalStore) throw new Error(`${label}: unexpected package location ${actual}`)
@@ -62,6 +66,10 @@ try {
 `)
     checked('pnpm', ['install', '--ignore-scripts'], runtimeRoot)
     const consolidate = join(runtimeApp, 'node_modules/@vue/consolidate')
+    const runtimeReports = JSON.parse(checked(binary, ['--json', runtimeRoot], runtimeRoot))
+    if (!runtimeReports.some((report) => report.package === '@vue/consolidate@1.0.0' && report.findings.some((finding) => finding.dependency === 'pug'))) {
+      throw new Error(`${label}: root project scan missed @vue/consolidate in the workspace`)
+    }
     const runtimeActual = await realpath(consolidate)
     if (relative(runtimeRoot, runtimeActual).startsWith('..') !== globalStore) throw new Error(`${label}: unexpected package location ${runtimeActual}`)
     const beforeRender = run(process.execPath, ['render.cjs'], runtimeApp)

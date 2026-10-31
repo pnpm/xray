@@ -46,6 +46,8 @@ pub struct Manifest {
     pub bin: Value,
     #[serde(default)]
     pub exports: Value,
+    #[serde(default)]
+    pub imports: Value,
 }
 
 // npm also accepts `bundleDependencies: true`, meaning all dependencies are
@@ -153,6 +155,40 @@ impl Manifest {
             })
             .max_by_key(|(candidate, prefix_len)| (*prefix_len, candidate.len()));
         best.is_none_or(|(candidate, _)| candidate == key)
+    }
+
+    /// Resolve the most specific package-import mapping, keeping each condition
+    /// as a possible target because consumers may enable different conditions.
+    pub fn import_targets(&self, specifier: &str) -> Vec<String> {
+        let Some(map) = self.imports.as_object() else {
+            return Vec::new();
+        };
+        let selected = if let Some(value) = map.get(specifier) {
+            Some((value, None))
+        } else {
+            map.iter()
+                .filter_map(|(key, value)| {
+                    let (prefix, suffix) = key.split_once('*')?;
+                    if suffix.contains('*') {
+                        return None;
+                    }
+                    let matched = specifier.strip_prefix(prefix)?.strip_suffix(suffix)?;
+                    (!matched.is_empty()).then_some((value, matched, prefix.len(), key.len()))
+                })
+                .max_by_key(|(_, _, prefix_len, key_len)| (*prefix_len, *key_len))
+                .map(|(value, matched, _, _)| (value, Some(matched)))
+        };
+        let Some((value, matched)) = selected else {
+            return Vec::new();
+        };
+        let mut targets = Vec::new();
+        collect_paths(value, &mut targets);
+        if let Some(matched) = matched {
+            for target in &mut targets {
+                *target = target.replace('*', matched);
+            }
+        }
+        targets
     }
 }
 

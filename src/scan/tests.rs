@@ -135,9 +135,20 @@ fn aliases_of_create_require_and_its_result_are_node_imports() {
     for source in [
         "import { createRequire as makeLoader } from 'node:module'; const load = makeLoader(import.meta.url); load('loaded');",
         "const { createRequire: makeLoader } = require('node:module'); const load = makeLoader(__filename); load('loaded');",
+        "import * as mod from 'node:module'; const load = mod.createRequire(import.meta.url); load('loaded');",
+        "const mod = require('node:module'); const load = mod.createRequire(__filename); load('loaded');",
+        "const load = require('node:module').createRequire(__filename); load('loaded');",
     ] {
         assert_eq!(script(source, "index.js"), ["loaded", "node:module"]);
     }
+}
+
+#[test]
+fn unrelated_factory_named_create_require_is_not_a_node_loader() {
+    let source = "import { createRequire } from 'unrelated'; const load = createRequire(); load('not-a-dependency');";
+    assert_eq!(script(source, "index.js"), ["unrelated"]);
+    let shadowed = "function f(require) { const {createRequire} = require('node:module'); const load = createRequire(); load('not-a-dependency'); }";
+    assert!(script(shadowed, "index.js").is_empty());
 }
 
 #[test]

@@ -44,6 +44,18 @@ pub fn reachable_files(package_dir: &Path, manifest: &Manifest) -> BTreeSet<Path
             let scan::Requirement::Module(specifier) = requirement else {
                 continue;
             };
+            if specifier.starts_with('#') {
+                for target in manifest.import_targets(&specifier) {
+                    if target.starts_with("./") {
+                        if let Some(file) = resolve_relative(&root, &target) {
+                            if file.starts_with(&root) {
+                                queue.push(file);
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
             if !specifier.starts_with('.') {
                 continue;
             }
