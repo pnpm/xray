@@ -136,11 +136,15 @@ function hasLocalResolvePaths(node, current) {
   return paths?.type === 'ArrayExpression' && paths.elements.length === 1 &&
     paths.elements[0]?.type === 'Identifier' && paths.elements[0].name === '__dirname' && !shadowed(current, '__dirname');
 }
+function isTypeOnly(kind) { return kind === 'type' || kind === 'typeof'; }
 function visit(node) {
   if (!node || typeof node !== 'object') return;
   if (Array.isArray(node)) { for (const item of node) visit(item); return; }
   switch (node.type) {
-    case 'ImportDeclaration': record(node.source, node.importKind === 'type' || node.importKind === 'typeof' ? 'types' : 'runtime', true); break;
+    // Flow strips an import whose every specifier is `type` or `typeof`, the
+    // same as a statement-level `import type`.
+    case 'ImportDeclaration': record(node.source, isTypeOnly(node.importKind) ||
+      (node.specifiers.length > 0 && node.specifiers.every(specifier => isTypeOnly(specifier.importKind))) ? 'types' : 'runtime', true); break;
     case 'ExportNamedDeclaration': case 'ExportAllDeclaration': record(node.source, node.exportKind === 'type' ? 'types' : 'runtime', true); break;
     case 'ImportExpression': record(node.source, 'runtime', true); break;
     case 'CallExpression': {

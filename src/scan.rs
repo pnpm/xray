@@ -3,8 +3,8 @@ use oxc_ast::ast::{
     Argument, ArrayExpressionElement, BindingPattern, CallExpression, ExportAllDeclaration,
     ExportFromDeclaration, Expression, ImportDeclaration, ImportDeclarationSpecifier,
     ImportExpression, ObjectPropertyKind, Program, PropertyKey, PropertyKind,
-    TSExternalModuleReference, TSImportType, VariableDeclaration, VariableDeclarationKind,
-    VariableDeclarator,
+    TSImportEqualsDeclaration, TSImportType, TSModuleReference, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
@@ -436,8 +436,17 @@ impl<'a> Visit<'a> for Collector<'_> {
         walk::walk_ts_import_type(self, ty);
     }
 
-    fn visit_ts_external_module_reference(&mut self, reference: &TSExternalModuleReference<'a>) {
-        self.record(reference.expression.value.as_str(), reference.expression.span.start);
+    /// `import type X = require("pkg")` is erased like `import type`.
+    fn visit_ts_import_equals_declaration(&mut self, decl: &TSImportEqualsDeclaration<'a>) {
+        if let TSModuleReference::ExternalModuleReference(reference) = &decl.module_reference {
+            let specifier = reference.expression.value.as_str();
+            let offset = reference.expression.span.start;
+            if decl.import_kind.is_type() {
+                self.record_type_only(specifier, offset);
+            } else {
+                self.record(specifier, offset);
+            }
+        }
     }
 
     /// `require("pkg")` and `require.resolve("pkg")`. A call whose argument is

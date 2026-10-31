@@ -459,6 +459,34 @@ fn inline_type_specifiers_are_read_as_runtime() {
 }
 
 #[test]
+fn import_type_equals_require_is_type_only() {
+    let found =
+        origins("import type A = require('erased'); import B = require('kept');", "index.ts");
+    assert_eq!(
+        found,
+        [
+            (Requirement::Module("erased".into()), Origin::Types),
+            (Requirement::Module("kept".into()), Origin::Runtime),
+        ],
+    );
+}
+
+#[test]
+fn flow_imports_of_only_type_specifiers_are_type_only() {
+    let source = "// @flow\nimport {type A, typeof B} from 'erased';\nimport {type C, D} from 'kept';\nimport {} from 'empty';\nimport E from 'default';\n";
+    let found = origins(source, "index.js");
+    assert_eq!(
+        found,
+        [
+            (Requirement::Module("default".into()), Origin::Runtime),
+            (Requirement::Module("empty".into()), Origin::Runtime),
+            (Requirement::Module("erased".into()), Origin::Types),
+            (Requirement::Module("kept".into()), Origin::Runtime),
+        ],
+    );
+}
+
+#[test]
 fn flow_return_comments_after_arrow_preserve_type_imports() {
     let source = "// @flow\n/*:: import type { Item } from 'type-provider'; */\nconst get = (x /*: Item */) => /*: Item */ x;\nrequire('runtime-provider');";
     let references = crate::scan::references(source, Path::new("index.js")).unwrap();
