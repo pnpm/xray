@@ -392,15 +392,40 @@ fn repair_scans_flow_files_exported_by_wildcard() {
     assert_eq!(report.findings[0].origin, Origin::Types);
 }
 
+#[cfg(unix)]
 #[test]
 fn unreadable_source_cannot_be_reported_as_clean() {
+    use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("package.json"), r#"{"name":"example","version":"1.0.0"}"#)
         .unwrap();
-    std::fs::write(root.path().join("index.ts"), [0xff, 0xfe]).unwrap();
+    let source = root.path().join("index.ts");
+    std::fs::write(&source, "export {};").unwrap();
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&source).is_ok() {
+        // Running as root: permissions do not stop the read.
+        return;
+    }
     let error = analyze(root.path(), Scope::Declared).unwrap_err().to_string();
     assert!(error.contains("reading source"), "{error}");
     assert!(error.contains("index.ts"), "{error}");
+}
+
+#[test]
+fn invalid_utf8_in_typescript_and_stylesheets_is_decoded_leniently() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("package.json"), r#"{"name":"example","version":"1.0.0"}"#)
+        .unwrap();
+    std::fs::write(
+        root.path().join("index.ts"),
+        b"const name = '\xe8'; import x from 'ts-package'; export default [name, x];",
+    )
+    .unwrap();
+    std::fs::write(root.path().join("index.d.ts"), b"// \xe8\nimport 'dts-package';").unwrap();
+    std::fs::write(root.path().join("style.scss"), b"/* \xe8 */ @use 'scss-package';").unwrap();
+    let report = analyze(root.path(), Scope::EveryFile).unwrap().unwrap();
+    let names: Vec<_> = report.findings.iter().map(|finding| finding.dependency.as_str()).collect();
+    assert_eq!(names, ["dts-package", "scss-package", "ts-package"]);
 }
 
 #[test]

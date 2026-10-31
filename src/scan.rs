@@ -19,20 +19,17 @@ use std::{
     process::{Command, Stdio},
 };
 
-/// Node decodes JavaScript as UTF-8 with replacement for invalid bytes.
-/// Preserve that behavior for published scripts while keeping other formats strict.
+/// Node decodes JavaScript as UTF-8 with replacement for invalid bytes, and so
+/// do the TypeScript compiler and the stylesheet tools for their own sources. A
+/// stray Latin-1 byte in a comment or string therefore breaks none of them, and
+/// must not make the scan incomplete either. Only failing to read the file is
+/// an error.
 pub fn read_source(path: &Path) -> std::io::Result<String> {
     let bytes = std::fs::read(path)?;
-    if path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| matches!(extension, "js" | "cjs" | "mjs"))
-    {
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
-    } else {
-        String::from_utf8(bytes)
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
-    }
+    Ok(match String::from_utf8(bytes) {
+        Ok(source) => source,
+        Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+    })
 }
 
 /// Every module specifier a file asks for.
