@@ -88,6 +88,40 @@ fn export_patterns_include_nested_matching_files() {
     );
 }
 
+#[test]
+fn specific_export_keys_override_wildcards_including_null_exclusions() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest(
+            "pkg",
+            r#","exports":{"./*":"./dist/*.js","./private/*":null,"./secret":null,"./special":"./other.js","./private/allowed":"./allowed.js"}"#,
+        ),
+    );
+    write(&dir.join("dist/public.js"), "require('public');");
+    write(&dir.join("dist/private/hidden.js"), "require('hidden');");
+    write(&dir.join("dist/private/allowed.js"), "require('wrong-allowed');");
+    write(&dir.join("dist/secret.js"), "require('secret');");
+    write(&dir.join("dist/special.js"), "require('wrong-special');");
+    write(&dir.join("other.js"), "require('special');");
+    write(&dir.join("allowed.js"), "require('allowed');");
+    assert_eq!(names(&dir), ["allowed.js", "dist/public.js", "other.js"]);
+}
+
+#[test]
+fn excluded_file_is_still_reached_via_a_relative_import() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest("pkg", r#","exports":{"./*":"./dist/*.js","./private/*":null}"#),
+    );
+    write(&dir.join("dist/public.js"), "require('./private/helper.js');");
+    write(&dir.join("dist/private/helper.js"), "require('dependency');");
+    assert_eq!(names(&dir), ["dist/private/helper.js", "dist/public.js"]);
+}
+
 /// Two files importing each other is ordinary, and it used to walk forever:
 /// joining `./a` onto a directory keeps the `.`, so the same file arrived under
 /// a new path each lap and the visited set never recognised it. The walk ate

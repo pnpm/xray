@@ -12,10 +12,10 @@ node corpus/run.mjs
 node corpus/run.mjs /path/to/xray
 ```
 
-Each entry records an observed shipped import and the manifest declaration that
-makes it a candidate for an extension. Assertions are deliberately limited to
-positive findings: they do not certify that every finding is actionable, that a
-suggested version is compatible, or that the emitted extension fixes a project.
+Broken-package entries record a shipped import and the manifest declaration that
+makes it a candidate for an extension. Clean controls assert zero findings, and
+every entry asserts zero diagnostic lines. These checks do not certify that
+every finding is actionable or that a suggested version is compatible.
 In particular, Docusaurus uses generated and bundler aliases; treating those as
 npm packages would generate false positives. Its published `.js` files also
 contain JSX. The tarball checks scan individual packages and are a starting point,

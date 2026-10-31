@@ -12,7 +12,12 @@
         "declaredRange": "5.2.13"
       }
     ],
-    "evidence": "The published declaration files import @medplum/fhirtypes, but the published manifest lists it only in devDependencies."
+    "evidence": "The published declaration files import @medplum/fhirtypes, but the published manifest lists it only in devDependencies.",
+    "maxDiagnosticLines": 0,
+    "notExpected": [
+      "pdfmake",
+      "node:crypto"
+    ]
   },
   {
     "name": "@docusaurus/core",
@@ -27,7 +32,8 @@
         "declaredRange": "3.10.2"
       }
     ],
-    "evidence": "Published declarations import @docusaurus/types, which is listed only in devDependencies. This package also exercises generated and bundler aliases and JSX in .js files."
+    "evidence": "Published declarations import @docusaurus/types, which is listed only in devDependencies. This package also exercises generated and bundler aliases and JSX in .js files.",
+    "maxDiagnosticLines": 0
   },
   {
     "name": "@vue/consolidate",
@@ -42,6 +48,37 @@
         "declaredRange": "^3.0.0"
       }
     ],
-    "evidence": "The pug render adapter requires pug at runtime, but pug appears only in devDependencies."
+    "evidence": "The pug render adapter requires pug at runtime, but pug appears only in devDependencies.",
+    "maxDiagnosticLines": 0
+  },
+  {
+    "name": "@jridgewell/remapping",
+    "version": "2.3.5",
+    "url": "https://registry.npmjs.org/@jridgewell/remapping/-/remapping-2.3.5.tgz",
+    "sha512": "2c8f6effe95a606e03b354c3292256d983eb22571560ec22d9f502eb1078de5b9e0a383157895f7ce0990ad605887e9334e5feb50297c7ded3e082876e1c8711",
+    "expected": [],
+    "maxFindings": 0,
+    "maxDiagnosticLines": 0,
+    "evidence": "Published declaration files exercise TypeScript declaration parsing; its runtime dependencies are declared."
+  },
+  {
+    "name": "is-number",
+    "version": "7.0.0",
+    "url": "https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz",
+    "sha512": "e350a27e483a7bc4f2952a5db53a5e2d532abd20445734edb47bc4443ef8d7ea6767c00dbf4d34e0c44be3740a3c394af5c1af369e8d6566540656c65d8c719e",
+    "expected": [],
+    "maxFindings": 0,
+    "maxDiagnosticLines": 0,
+    "evidence": "A dependency-free CommonJS package; a finding would be a false positive."
+  },
+  {
+    "name": "nanoid",
+    "version": "5.1.6",
+    "url": "https://registry.npmjs.org/nanoid/-/nanoid-5.1.6.tgz",
+    "sha512": "73bfbb450f9d301e5d3f0c02a7879ed7f895fead8fe9a2b599365c7ebd414ee565c96f6125888c3f26c909c9c1950b6e4a64c858d79ace6ff3a8da1949212506",
+    "expected": [],
+    "maxFindings": 0,
+    "maxDiagnosticLines": 0,
+    "evidence": "ES module package using node builtins and relative imports; neither requires an npm dependency."
   }
 ]

@@ -5,6 +5,11 @@ use std::{collections::BTreeMap, path::Path};
 
 type DepMap = BTreeMap<String, String>;
 
+pub struct EntryPath {
+    pub path: String,
+    pub export_key: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
@@ -101,17 +106,53 @@ impl Manifest {
     /// not be followed. `bin` and `types` are not superseded: a command is an
     /// entry however the package exports its modules, and a compiler still
     /// reads `types` when no export condition names one.
-    pub fn entry_paths(&self) -> Vec<String> {
-        let mut paths = Vec::new();
-        let module_entries: &[&Value] = if self.is_encapsulated() {
-            &[&self.exports]
-        } else {
-            &[&self.main, &self.module, &self.browser]
+    pub fn entry_paths(&self) -> Vec<EntryPath> {
+        let mut paths: Vec<EntryPath> = Vec::new();
+        let mut add_paths = |value: &Value, export_key: Option<&str>| {
+            let mut targets = Vec::new();
+            collect_paths(value, &mut targets);
+            paths.extend(
+                targets
+                    .into_iter()
+                    .map(|path| EntryPath { path, export_key: export_key.map(str::to_string) }),
+            );
         };
-        for field in module_entries.iter().copied().chain([&self.types, &self.typings, &self.bin]) {
-            collect_paths(field, &mut paths);
+        if let Some(map) =
+            self.exports.as_object().filter(|map| map.keys().any(|key| key.starts_with('.')))
+        {
+            for (key, value) in map {
+                add_paths(value, Some(key));
+            }
+        } else if self.is_encapsulated() {
+            add_paths(&self.exports, Some("."));
+        } else {
+            for field in [&self.main, &self.module, &self.browser] {
+                add_paths(field, None);
+            }
+        }
+        for field in [&self.types, &self.typings, &self.bin] {
+            add_paths(field, None);
         }
         paths
+    }
+
+    /// Only the most specific export key applies to a requested subpath.
+    pub fn selects_export(&self, key: &str, subpath: &str) -> bool {
+        let Some(map) = self.exports.as_object() else {
+            return true;
+        };
+        if map.contains_key(subpath) {
+            return key == subpath;
+        }
+        let best = map
+            .keys()
+            .filter_map(|candidate| {
+                let (prefix, suffix) = candidate.split_once('*')?;
+                let middle = subpath.strip_prefix(prefix)?.strip_suffix(suffix)?;
+                (!middle.is_empty() && !suffix.contains('*')).then_some((candidate, prefix.len()))
+            })
+            .max_by_key(|(candidate, prefix_len)| (*prefix_len, candidate.len()));
+        best.is_none_or(|(candidate, _)| candidate == key)
     }
 }
 

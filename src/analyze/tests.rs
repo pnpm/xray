@@ -98,3 +98,14 @@ fn boolean_bundle_dependencies_does_not_prevent_analysis() {
         assert_eq!(report.findings[0].dependency, "missing");
     }
 }
+
+#[test]
+fn unreadable_source_cannot_be_reported_as_clean() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("package.json"), r#"{"name":"example","version":"1.0.0"}"#)
+        .unwrap();
+    std::fs::write(root.path().join("index.js"), [0xff, 0xfe]).unwrap();
+    let error = analyze(root.path(), Scope::Declared).unwrap_err().to_string();
+    assert!(error.contains("reading source"), "{error}");
+    assert!(error.contains("index.js"), "{error}");
+}

@@ -8,7 +8,7 @@ use crate::{
     report::{Finding, PackageReport, Severity},
     scan::{self, Origin},
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     path::{Path, PathBuf},
@@ -48,9 +48,8 @@ pub fn analyze(package_dir: &Path, scope: Scope) -> Result<Option<PackageReport>
     let mut referenced: BTreeSet<(scan::Requirement, Origin)> = BTreeSet::new();
     let mut unparsed = Vec::new();
     for file in files {
-        let Ok(source) = std::fs::read_to_string(&file) else {
-            continue;
-        };
+        let source = std::fs::read_to_string(&file)
+            .with_context(|| format!("reading source {}", file.display()))?;
         match scan::specifiers(&source, &file) {
             Ok(found) => referenced.extend(found),
             Err(reason) => unparsed.push((file, reason)),

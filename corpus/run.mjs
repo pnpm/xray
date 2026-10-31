@@ -37,8 +37,22 @@ try {
         console.log(`PASS ${test.name}@${test.version}: ${expected.dependency}`)
       }
     }
+    for (const dependency of test.notExpected ?? []) {
+      if (findings.some((actual) => actual.dependency === dependency)) {
+        console.error(`FAIL ${test.name}@${test.version}: unexpected finding ${dependency}`)
+        failed = true
+      }
+    }
+    if (test.maxFindings !== undefined && findings.length > test.maxFindings) {
+      console.error(`FAIL ${test.name}@${test.version}: expected at most ${test.maxFindings} findings, got ${findings.length}: ${JSON.stringify(findings)}`)
+      failed = true
+    }
     const warningCount = result.stderr.split('\n').filter(Boolean).length
-    console.log(`  ${findings.length} total findings; ${warningCount} diagnostic lines`)
+    if (test.maxDiagnosticLines !== undefined && warningCount > test.maxDiagnosticLines) {
+      console.error(`FAIL ${test.name}@${test.version}: expected at most ${test.maxDiagnosticLines} diagnostic lines, got ${warningCount}:\n${result.stderr}`)
+      failed = true
+    }
+    console.log(`${test.name}@${test.version}: ${findings.length} findings; ${warningCount} diagnostic lines`)
   }
 } finally {
   await rm(temp, { recursive: true, force: true })

@@ -62,7 +62,14 @@ fn entry_files(package_dir: &Path, manifest: &Manifest) -> Vec<PathBuf> {
     let mut entries: Vec<PathBuf> = manifest
         .entry_paths()
         .iter()
-        .flat_map(|path| expand_entry(package_dir, path.trim_start_matches("./")))
+        .flat_map(|entry| {
+            expand_entry(
+                package_dir,
+                entry.path.trim_start_matches("./"),
+                entry.export_key.as_deref(),
+                manifest,
+            )
+        })
         .filter(|path| path.starts_with(package_dir))
         .collect();
 
@@ -78,7 +85,12 @@ fn entry_files(package_dir: &Path, manifest: &Manifest) -> Vec<PathBuf> {
 /// Export patterns substitute the same `*` with a subpath, including slashes.
 /// Enumerating shipped files makes these entries visible without following
 /// symlinks into other packages or scanning nested bundled dependencies.
-fn expand_entry(root: &Path, pattern: &str) -> Vec<PathBuf> {
+fn expand_entry(
+    root: &Path,
+    pattern: &str,
+    export_key: Option<&str>,
+    manifest: &Manifest,
+) -> Vec<PathBuf> {
     let Some((prefix, suffix)) = pattern.split_once('*') else {
         return resolve_relative(root, pattern).into_iter().collect();
     };
@@ -97,6 +109,12 @@ fn expand_entry(root: &Path, pattern: &str) -> Vec<PathBuf> {
             // Node substitutes the same value for each star in a target.
             if middle.is_empty() {
                 return None;
+            }
+            if let Some(key) = export_key {
+                let subpath = key.replace('*', middle);
+                if !manifest.selects_export(key, &subpath) {
+                    return None;
+                }
             }
             existing_file(entry.path())
         })
