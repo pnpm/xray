@@ -13,6 +13,25 @@ pub struct PackageReport {
     pub findings: Vec<Finding>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Diagnostic {
+    pub package: String,
+    pub file: String,
+    pub message: String,
+    pub kind: DiagnosticKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[expect(clippy::enum_variant_names, reason = "diagnostic names are part of the JSON schema")]
+pub enum DiagnosticKind {
+    ParseError,
+    ReadError,
+    AnalysisError,
+    ResolutionError,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Finding {
@@ -76,8 +95,19 @@ pub fn merge_reports(reports: Vec<PackageReport>) -> Vec<PackageReport> {
         .collect()
 }
 
-pub fn as_json(reports: &[PackageReport]) -> Result<String> {
-    Ok(format!("{}\n", serde_json::to_string_pretty(reports)?))
+pub fn as_json(
+    reports: &[PackageReport],
+    packages_scanned: usize,
+    diagnostics: &[Diagnostic],
+) -> Result<String> {
+    let result = serde_json::json!({
+        "schemaVersion": 1,
+        "packagesScanned": packages_scanned,
+        "packages": reports,
+        "diagnostics": diagnostics,
+        "complete": diagnostics.is_empty(),
+    });
+    Ok(format!("{}\n", serde_json::to_string_pretty(&result)?))
 }
 
 pub fn as_text(reports: &[PackageReport]) -> String {

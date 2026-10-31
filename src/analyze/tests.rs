@@ -163,8 +163,8 @@ fn findings_include_all_precise_source_references_and_import_aliases() {
         report.findings.iter().find(|finding| finding.dependency == "@types/missing").unwrap();
     let reference = types_reference.evidence.first().unwrap();
     assert_eq!((reference.file.as_str(), reference.line, reference.column), ("index.d.ts", 1, 1));
-    let json = crate::report::as_json(&[report]).unwrap();
-    assert!(json.contains("\"specifier\": \"#dep\""));
+    let json = crate::report::as_json(&[report], 1, &[]).unwrap();
+    assert!(json.contains(r##""specifier": "#dep""##));
 }
 
 #[test]
@@ -199,6 +199,23 @@ fn repair_rejects_unparsable_source_even_when_other_findings_exist() {
 }
 
 #[test]
+fn incomplete_scan_returns_structured_diagnostics_without_a_finding() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", ""));
+    write(&dir.join("broken.js"), "export const = ;");
+    let outcome = crate::analyze::analyze_with_diagnostics(&dir, Scope::Declared).unwrap();
+    assert!(outcome.report.is_none());
+    assert_eq!(outcome.diagnostics.len(), 1);
+    let diagnostic = &outcome.diagnostics[0];
+    assert_eq!(diagnostic.package, "pkg@1.0.0");
+    assert_eq!(diagnostic.file, "broken.js");
+    assert_eq!(diagnostic.kind, crate::report::DiagnosticKind::ParseError);
+    assert!(!diagnostic.message.is_empty());
+}
+
+#[test]
 fn repair_without_exports_follows_entries_not_unrelated_source() {
     use crate::fixtures::{manifest, write};
     let root = tempfile::tempdir().unwrap();
@@ -211,6 +228,25 @@ fn repair_without_exports_follows_entries_not_unrelated_source() {
     assert!(crate::analyze::analyze_for_repair(&dir, Scope::EveryFile).is_err());
     write(&dir.join("index.js"), "require('missing'); require('./src/unrelated.js');");
     assert!(crate::analyze::analyze_for_repair(&dir, Scope::Declared).is_err());
+}
+
+#[test]
+fn repair_scans_flow_files_exported_by_wildcard() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest("pkg", r#","exports":{".":"./index.js","./*":"./*"}"#),
+    );
+    write(&dir.join("index.js"), "module.exports = 1;");
+    write(
+        &dir.join("source.js"),
+        "// @flow\nimport type { Foo } from 'missing';\nexport type X = {| +x: Foo |};",
+    );
+    let report = crate::analyze::analyze_for_repair(&dir, Scope::Declared).unwrap().unwrap();
+    assert_eq!(report.findings[0].dependency, "missing");
+    assert_eq!(report.findings[0].origin, Origin::Types);
 }
 
 #[test]

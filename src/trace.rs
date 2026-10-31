@@ -2,7 +2,7 @@
 use crate::{
     classify::package_name,
     manifest::Manifest,
-    report::{Evidence, Finding, PackageReport, Severity},
+    report::{Diagnostic, DiagnosticKind, Evidence, Finding, PackageReport, Severity},
     scan::Origin,
 };
 use anyhow::{Context, Result};
@@ -18,11 +18,16 @@ use std::{
 struct Event {
     specifier: String,
     parent: PathBuf,
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    message: String,
 }
 
 pub struct TraceResult {
     pub status: ExitStatus,
     pub reports: Vec<PackageReport>,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// Run a command with the Node preload active. Its streams and exit status are
@@ -46,8 +51,8 @@ pub fn run(command: &[OsString], packages: &[PathBuf], project: &Path) -> Result
         .env("XRAY_TRACE_FILE", &events)
         .status()
         .context("starting traced command")?;
-    let reports = reports_from_events(&std::fs::read_to_string(events)?, packages)?;
-    Ok(TraceResult { status, reports })
+    let (reports, diagnostics) = reports_from_events(&std::fs::read_to_string(events)?, packages)?;
+    Ok(TraceResult { status, reports, diagnostics })
 }
 
 // Escape spaces and non-ASCII bytes so NODE_OPTIONS doesn't split the URL.
@@ -69,7 +74,10 @@ fn file_url(path: &Path) -> Result<String> {
     Ok(url)
 }
 
-fn reports_from_events(raw: &str, packages: &[PathBuf]) -> Result<Vec<PackageReport>> {
+fn reports_from_events(
+    raw: &str,
+    packages: &[PathBuf],
+) -> Result<(Vec<PackageReport>, Vec<Diagnostic>)> {
     let mut roots = Vec::new();
     for package in packages {
         let path = package.canonicalize()?;
@@ -84,18 +92,38 @@ fn reports_from_events(raw: &str, packages: &[PathBuf]) -> Result<Vec<PackageRep
     }
     roots.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
     let mut reports: BTreeMap<String, BTreeMap<String, Finding>> = BTreeMap::new();
+    let mut diagnostics = BTreeMap::new();
     for line in raw.lines() {
         let event: Event = serde_json::from_str(line).context("reading Node trace event")?;
-        let Some(name) = package_name(&event.specifier) else { continue };
         let Ok(parent) = event.parent.canonicalize() else { continue };
         let Some((root, manifest)) = roots.iter().find(|(path, _)| parent.starts_with(path)) else {
             continue;
         };
-        // A declared package can still fail due to a missing subpath or install;
-        // a phantom-dependency extension is not the right remedy for that.
-        if manifest.reachable().any(|declared| declared == name) {
+        let relative = parent.strip_prefix(root).unwrap_or(&parent).to_string_lossy().into_owned();
+        let name = package_name(&event.specifier);
+        let declared = name.is_some_and(|name| manifest.reachable().any(|dep| dep == name));
+        let missing = event.code.is_empty()
+            || matches!(event.code.as_str(), "MODULE_NOT_FOUND" | "ERR_MODULE_NOT_FOUND");
+        if !missing || declared || event.specifier.starts_with('#') {
+            let message = format!(
+                "{}: {} ({})",
+                event.code,
+                event.specifier,
+                event.message.lines().next().unwrap_or("")
+            );
+            let diagnostic = Diagnostic {
+                package: manifest.id(),
+                file: relative,
+                message,
+                kind: DiagnosticKind::ResolutionError,
+            };
+            diagnostics.insert(
+                (diagnostic.package.clone(), diagnostic.file.clone(), diagnostic.message.clone()),
+                diagnostic,
+            );
             continue;
         }
+        let Some(name) = name else { continue };
         let range = manifest.dev_dependencies.get(name).cloned();
         let severity = if range.is_some() { Severity::DevDependency } else { Severity::Undeclared };
         let finding =
@@ -108,7 +136,6 @@ fn reports_from_events(raw: &str, packages: &[PathBuf]) -> Result<Vec<PackageRep
                     evidence: BTreeSet::new(),
                 },
             );
-        let relative = parent.strip_prefix(root).unwrap_or(&parent).to_string_lossy().into_owned();
         finding.evidence.insert(Evidence {
             file: relative,
             line: 0,
@@ -117,125 +144,15 @@ fn reports_from_events(raw: &str, packages: &[PathBuf]) -> Result<Vec<PackageRep
             origin: Origin::Runtime,
         });
     }
-    Ok(reports
+    let reports = reports
         .into_iter()
         .map(|(package, findings)| PackageReport {
             package,
             findings: findings.into_values().collect(),
         })
-        .collect())
+        .collect();
+    Ok((reports, diagnostics.into_values().collect()))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn observes_caught_dynamic_resolution_failures_from_installed_packages() {
-        let supported = Command::new("node")
-            .args([
-                "-e",
-                "process.exit(typeof require('node:module').registerHooks === 'function' ? 0 : 1)",
-            ])
-            .status()
-            .is_ok_and(|status| status.success());
-        if !supported {
-            return;
-        }
-        let temp = tempfile::tempdir().unwrap();
-        let package = temp.path().join("node_modules/example");
-        std::fs::create_dir_all(&package).unwrap();
-        std::fs::write(
-            package.join("package.json"),
-            r#"{"name":"example","version":"1.0.0","devDependencies":{"missing-runtime":"^2"}}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            package.join("index.cjs"),
-            "const dep = 'missing-' + 'runtime'; try { require(dep); } catch {}\n",
-        )
-        .unwrap();
-        let result = run(
-            &["node".into(), package.join("index.cjs").into_os_string()],
-            &[package],
-            temp.path(),
-        )
-        .unwrap();
-        assert!(result.status.success());
-        assert_eq!(result.reports.len(), 1);
-        let finding = &result.reports[0].findings[0];
-        assert_eq!(finding.dependency, "missing-runtime");
-        assert_eq!(finding.declared_range.as_deref(), Some("^2"));
-        assert_eq!(finding.evidence.first().unwrap().file, "index.cjs");
-    }
-
-    #[test]
-    fn ignores_workspace_imports_and_declared_dependencies() {
-        let temp = tempfile::tempdir().unwrap();
-        let package = temp.path().join("node_modules/example");
-        std::fs::create_dir_all(&package).unwrap();
-        std::fs::write(
-            package.join("package.json"),
-            r#"{"name":"example","version":"1.0.0","dependencies":{"declared":"1"}}"#,
-        )
-        .unwrap();
-        let installed_file = package.join("index.js");
-        let workspace_file = temp.path().join("app.js");
-        std::fs::write(&installed_file, "").unwrap();
-        std::fs::write(&workspace_file, "").unwrap();
-        let raw = format!(
-            "{}\n{}\n",
-            serde_json::json!({"specifier":"declared", "parent":installed_file}),
-            serde_json::json!({"specifier":"missing", "parent":workspace_file})
-        );
-        assert!(reports_from_events(&raw, &[package]).unwrap().is_empty());
-    }
-    #[test]
-    fn preserves_nonzero_exit_status_and_observes_dynamic_esm_import() {
-        if !Command::new("node")
-            .args([
-                "-e",
-                "process.exit(typeof require('node:module').registerHooks === 'function' ? 0 : 1)",
-            ])
-            .status()
-            .is_ok_and(|s| s.success())
-        {
-            return;
-        }
-        let temp = tempfile::tempdir().unwrap();
-        let package = temp.path().join("node_modules/example");
-        std::fs::create_dir_all(&package).unwrap();
-        std::fs::write(package.join("package.json"), r#"{"name":"example","version":"1.0.0"}"#)
-            .unwrap();
-        std::fs::write(
-            package.join("index.mjs"),
-            "try { await import('missing-' + 'esm'); } catch {} process.exitCode = 7;\n",
-        )
-        .unwrap();
-        let result = run(
-            &["node".into(), package.join("index.mjs").into_os_string()],
-            &[package],
-            temp.path(),
-        )
-        .unwrap();
-        assert_eq!(result.status.code(), Some(7));
-        assert_eq!(result.reports[0].findings[0].dependency, "missing-esm");
-    }
-    #[test]
-    fn child_command_runs_from_project_directory() {
-        let temp = tempfile::tempdir().unwrap();
-        let marker = temp.path().join("marker");
-        std::fs::write(marker, "").unwrap();
-        let result = run(
-            &[
-                "node".into(),
-                "-e".into(),
-                "process.exit(require('fs').existsSync('marker') ? 0 : 8)".into(),
-            ],
-            &[],
-            temp.path(),
-        )
-        .unwrap();
-        assert!(result.status.success());
-    }
-}
+mod tests;

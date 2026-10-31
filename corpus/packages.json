@@ -126,5 +126,19 @@
     ],
     "maxDiagnosticLines": 0,
     "evidence": "Shipped declarations import estree. Real consumers require @types/estree; an optional peer on estree does not repair the missing type dependency."
+  },
+  {
+    "name": "unenv",
+    "version": "2.0.0-rc.24",
+    "url": "https://registry.npmjs.org/unenv/-/unenv-2.0.0-rc.24.tgz",
+    "sha512": "8bba910a6638db3982c2762587d1f64af2c4ca91051b27b989198430a8dc1a2ef393d52aba28118c5b532f3d1362aaf46462d985a30797f7e8cb56d947e0b097",
+    "expected": [],
+    "maxDiagnosticLines": 2,
+    "expectedDiagnostics": [
+      "dist/runtime/node/constants.d.mts",
+      "dist/runtime/node/process.d.mts"
+    ],
+    "evidence": "Two shipped declaration files are rejected by the current parser. This case records incomplete analysis; it does not assert a repair.",
+    "expectedIncomplete": true
   }
 ]

@@ -30,6 +30,7 @@ pub fn missing_package(
                 declared.contains(name.as_str()) || declared.contains(types_package.as_str());
             (!satisfied).then_some(types_package)
         }
+        Requirement::PathReference(_) => None,
     }
 }
 

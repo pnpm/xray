@@ -136,3 +136,64 @@ suggests optional peer `estree` and leaves this error unchanged. Replacing that
 entry with dependency `@types/estree: 1.0.8` makes the check pass. This is a
 known limitation: the source module specifier alone does not prove which
 published `@types` package and version should be installed.
+
+## Whole-workspace repair dry runs
+
+On the four checkouts above, the full-project `xray --fix --dry-run` completed
+for Vite, Vue, and SvelteKit; it left 88, 71, and 27 findings, respectively,
+without selected repairs. On Astro, it stopped before writing because
+`katex@0.16.28` ships Flow syntax in `katex.js`; that file is included by the
+package's wildcard exports. This is an incomplete scan, not a clean result.
+
+On the Vue global-store checkout, applying the entire generated proposal worked,
+but `pnpm install --no-frozen-lockfile --ignore-scripts --config.hoist=false
+--config.enable-global-virtual-store=true` failed under the configured trust
+policy. A newly selected `@types/node@20.19.43` dependency tree required
+`undici-types@6.21.0`, which pnpm rejected as a possible trust downgrade. The
+proposal included several historical `@types/node` ranges from publishers'
+development dependencies. The focused unit suite could not be rerun after that
+full proposal without changing the policy or proposal. The earlier targeted
+`@vue/consolidate` extension test is separate and did pass.
+
+A subsequent planner revision preferred installed providers as optional peers,
+which avoided introducing the rejected historical `@types/node` trees. The full
+Vue proposal still could not be installed: a new `@vue/repl@4.7.2` declaration
+repair selected `@vue/language-service@3.0.8`, whose dependency tree includes a
+git dependency that pnpm rejected under `blockExoticSubdeps`. This confirms that
+an author's development range alone does not establish that adding its whole
+dependency tree is safe or permitted. No trust or exotic-dependency policy was
+disabled for these tests.
+
+A targeted trace repair was then tested from the original Vue workspace settings
+and global-store install. Running `xray . --trace --fix -- node
+node_modules/vitest/vitest.mjs run --project 'unit*'` preserved the failing
+suite's exit status and generated optional peers for `pug` in
+`@vue/consolidate@1.0.0` and `ms` in `vite@8.3.4`. The other observed missing
+names, `then-pug` and `bufferutil`, had no selected installed provider. The
+trace does not distinguish a caught lookup from a required one, so the `ms`
+entry was not independently shown necessary. Reinstalling with scripts disabled
+and the workspace's existing trust and exotic-dependency policies succeeded;
+the unit suite then passed 183 files and 3,932 tests, with one file and six
+tests skipped. Repeating the traced repair passed the suite and made no YAML
+changes; it still observed the caught `bufferutil` lookup without selecting a
+repair.
+
+After Flow support was added, Astro's full dry run passed the prior KaTeX
+parser blocker but stopped on `unenv@2.0.0-rc.24` declarations. Its published
+`dist/runtime/node/process.d.mts` and `constants.d.mts` contain empty
+`export declare const;` statements. A separate global-store consumer importing
+`unenv/node/process` and `unenv/node/constants`, checked with TypeScript 5.9.3
+in NodeNext mode, reports five TS1123 errors. The npm tarball is
+`https://registry.npmjs.org/unenv/-/unenv-2.0.0-rc.24.tgz`, SHA-512 integrity
+`sha512-i7qRCmY42zmCwnYlh9H2SvLEypEFGye5iRmEMKjcGi7zk9UquigRjFtTLz0TYqr0ZGLZhaMHl/foy1bZR+Cwlw==`.
+
+The registry's `rc` tag was `2.0.0-rc.24` during this experiment. Releases
+rc.5, rc.8, rc.10, rc.16, rc.20, rc.22 and rc.23 also contain the malformed
+process declaration. The older rc.3 has syntactically valid declarations but
+still failed the same type-checking probe due to Node type errors, so no version
+override is verified. The JavaScript files export many named values; deleting
+empty declaration statements would omit those API types and is not a verified
+repair. An upstream declaration rebuild or a reviewed package patch is needed.
+A broad Astro scan also encountered intentionally invalid test fixtures and an
+unfinished editor-history file; those warnings alone do not establish package
+runtime failures.

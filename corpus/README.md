@@ -14,8 +14,8 @@ node corpus/run.mjs /path/to/xray
 
 Broken-package entries record a shipped import and the manifest declaration that
 makes it a candidate for an extension. Clean controls assert zero findings.
-Most entries assert zero diagnostic lines; the JSS release has a known Flow
-parsing warning. These checks do not certify that
+Most entries assert zero diagnostic lines; the unenv release has two malformed
+published declarations and checks that those diagnostics remain visible. These checks do not certify that
 every finding is actionable or that a suggested version is compatible.
 In particular, Docusaurus uses generated and bundler aliases; treating those as
 npm packages would generate false positives. Its published `.js` files also
@@ -31,7 +31,8 @@ The separate integration test requires pnpm and installs pinned registry package
 with lifecycle scripts disabled in temporary workspaces. It runs TypeScript before
 and after applying `xray --fix` in both isolated and global virtual stores with
 hoisting disabled. Each run checks that dry-run does not write, existing settings
-and comments survive, and repeating the fix is idempotent. It checks that the package physically lives outside
+and comments survive, and repeating the fix is idempotent. After reinstall, the
+root scan must stop reporting each repaired finding. It checks that the package physically lives outside
 the project in the global-store case. For the declaration case, the consumer does not declare the missing dependency,
 so success requires the extension to install and link it. A small ambient
 declaration isolates an unrelated optional pdfmake peer. For the runtime case,
@@ -51,3 +52,10 @@ node corpus/install-test.mjs
 
 The integration test covers five known broken releases; it does not establish that
 all generated fixes are safe or that every registry package has been checked.
+
+## CLI safety checks
+
+Run `node corpus/safety-test.mjs` to exercise conflicting extensions, parse
+failures and independent-package repairs, dry-run writes, reuse of an installed modern type provider across
+historical dev ranges, and trace stream and exit-status handling with local
+synthetic packages. These checks do not fetch or execute registry code.

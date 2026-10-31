@@ -7,10 +7,16 @@ use oxc_ast::ast::{
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
 use oxc_semantic::{Scoping, SemanticBuilder};
-use oxc_span::SourceType;
+use oxc_span::{GetSpan, SourceType};
 use oxc_syntax::symbol::SymbolId;
 use serde::Serialize;
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::BTreeSet,
+    io::Write,
+    path::Path,
+    process::{Command, Stdio},
+    sync::OnceLock,
+};
 
 /// Every module specifier a file asks for.
 ///
@@ -33,6 +39,9 @@ pub fn references(
     source: &str,
     path: &Path,
 ) -> Result<BTreeSet<(Requirement, Origin, u32)>, String> {
+    if !is_declaration(path) && has_flow_pragma(source) {
+        return flow_references(source);
+    }
     let allocator = Allocator::default();
     // Some published declaration generators emit `export = function name(...)`
     // signatures, which Oxc rejects. Parse the equivalent declaration on a
@@ -42,6 +51,10 @@ pub fn references(
         Ok(parsed) => parsed,
         Err(error) => match normalized.as_deref().filter(|text| *text != source) {
             Some(text) => parse(&allocator, text, path).map_err(|_| error)?,
+            None if !is_typescript(path) => {
+                return flow_references(source)
+                    .map_err(|flow_error| format!("{error}; Flow parser: {flow_error}"))
+            }
             None => return Err(error),
         },
     };
@@ -71,14 +84,93 @@ pub fn references(
     };
     collector.visit_program(&parsed);
     let mut found = collector.found;
-    if is_declaration(path) {
+    if is_typescript(path) {
         found.extend(
             triple_slash_references(&parsed)
                 .into_iter()
-                .map(|(name, offset)| (Requirement::TypesReference(name), Origin::Types, offset)),
+                .map(|(requirement, offset)| (requirement, Origin::Types, offset)),
         );
     }
     Ok(found)
+}
+
+fn has_flow_pragma(source: &str) -> bool {
+    let mut in_block = false;
+    for line in source.lines().take(10) {
+        let line = line.trim_start();
+        if let Some(comment) = line.strip_prefix("//") {
+            if comment.trim_start().starts_with("@flow") {
+                return true;
+            }
+        } else {
+            let comment = if let Some(comment) = line.strip_prefix("/*") {
+                in_block = true;
+                comment
+            } else if in_block {
+                line
+            } else {
+                continue;
+            };
+            if comment.trim_start_matches([' ', '\t', '*']).starts_with("@flow") {
+                return true;
+            }
+            if comment.contains("*/") {
+                in_block = false;
+            }
+        }
+    }
+    false
+}
+
+fn flow_references(source: &str) -> Result<BTreeSet<(Requirement, Origin, u32)>, String> {
+    static PARSER_DIR: OnceLock<Result<tempfile::TempDir, String>> = OnceLock::new();
+    let dir = PARSER_DIR
+        .get_or_init(|| {
+            let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
+            std::fs::write(
+                dir.path().join("flow_parser.js"),
+                include_bytes!("../vendor/flow-parser/flow_parser.js"),
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(dir)
+        })
+        .as_ref()
+        .map_err(Clone::clone)?;
+    let mut child = Command::new("node")
+        .arg("-e")
+        .arg(include_str!("flow_bridge.js"))
+        .arg(dir.path().join("flow_parser.js"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("starting Flow parser (Node.js required): {error}"))?;
+    let mut stdin = child.stdin.take().ok_or("Flow parser stdin unavailable")?;
+    stdin
+        .write_all(source.as_bytes())
+        .map_err(|error| format!("sending source to Flow parser: {error}"))?;
+    drop(stdin);
+    let output =
+        child.wait_with_output().map_err(|error| format!("waiting for Flow parser: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Flow parser failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let values: Vec<(String, String, u32)> = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("reading Flow parser output: {error}"))?;
+    values
+        .into_iter()
+        .map(|(specifier, origin, offset)| {
+            let origin = match origin.as_str() {
+                "types" => Origin::Types,
+                "runtime" => Origin::Runtime,
+                _ => return Err(format!("unknown Flow reference origin {origin}")),
+            };
+            Ok((Requirement::Module(specifier), origin, offset))
+        })
+        .collect()
 }
 
 /// Where a reference was found. A dependency reached from executable code
@@ -123,6 +215,11 @@ pub fn is_declaration(path: &Path) -> bool {
     name.ends_with(".d.ts") || name.ends_with(".d.mts") || name.ends_with(".d.cts")
 }
 
+fn is_typescript(path: &Path) -> bool {
+    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    [".ts", ".mts", ".cts", ".tsx"].iter().any(|extension| name.ends_with(extension))
+}
+
 /// What a file asks for. A `/// <reference types="x" />` is kept apart from an
 /// import because TypeScript looks it up under `@types/` first, so the package
 /// that satisfies it is usually not the name that was written.
@@ -130,6 +227,8 @@ pub fn is_declaration(path: &Path) -> bool {
 pub enum Requirement {
     Module(String),
     TypesReference(String),
+    /// A triple-slash path is relative to its containing file, even without `./`.
+    PathReference(String),
 }
 
 /// Declaration files are module syntax whatever their extension — a `.d.cts`
@@ -180,7 +279,7 @@ fn normalize_export_assignment(source: &str) -> String {
                             return format!(
                                 "{}declare{}{after_equals}",
                                 &line[..leading],
-                                " ".repeat(prefix_len - "declare".len())
+                                " ".repeat(prefix_len - "declare".len()),
                             );
                         }
                     }
@@ -416,11 +515,12 @@ fn is_node_module_load(call: &CallExpression<'_>, scoping: &Scoping) -> bool {
         && matches!(call.arguments.first(), Some(Argument::StringLiteral(name)) if matches!(name.value.as_str(), "module" | "node:module"))
 }
 
-fn triple_slash_references(program: &Program<'_>) -> Vec<(String, u32)> {
-    const MARKER: &str = "<reference types=";
+fn triple_slash_references(program: &Program<'_>) -> Vec<(Requirement, u32)> {
+    let first_statement = program.body.first().map_or(u32::MAX, |statement| statement.span().start);
     program
         .comments
         .iter()
+        .filter(|comment| comment.span.start < first_statement)
         .filter_map(|comment| {
             program
                 .source_text
@@ -429,9 +529,25 @@ fn triple_slash_references(program: &Program<'_>) -> Vec<(String, u32)> {
         })
         .filter(|(line, _)| line.starts_with("///"))
         .filter_map(|(line, offset)| {
-            let rest = line.split_once(MARKER)?.1.trim_start();
+            let directive = line.strip_prefix("///")?.trim_start();
+            let (rest, is_path) = if let Some(rest) = directive.strip_prefix("<reference types=") {
+                (rest, false)
+            } else {
+                (directive.strip_prefix("<reference path=")?, true)
+            };
+            let rest = rest.trim_start();
             let quote = rest.chars().next()?;
-            rest[quote.len_utf8()..].split(quote).next().map(|name| (name.to_string(), offset))
+            if quote != '\'' && quote != '"' {
+                return None;
+            }
+            rest[quote.len_utf8()..].split_once(quote).map(|(name, _)| {
+                let reference = if is_path {
+                    Requirement::PathReference(name.to_string())
+                } else {
+                    Requirement::TypesReference(name.to_string())
+                };
+                (reference, offset)
+            })
         })
         .collect()
 }

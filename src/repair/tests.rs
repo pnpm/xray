@@ -16,11 +16,11 @@ fn preserves_comments_settings_and_existing_extensions() {
     let parsed = YamlLoader::load_from_str(&merged).unwrap();
     assert_eq!(
         parsed[0]["packageExtensions"]["example@1.0.0"]["dependencies"]["helper"].as_str(),
-        Some("^2")
+        Some("^2"),
     );
     assert_eq!(
         parsed[0]["packageExtensions"]["other@2"]["dependencies"]["existing"].as_str(),
-        Some("~1")
+        Some("~1"),
     );
     assert_eq!(merge(&merged, PROPOSAL).unwrap(), merged);
 }
@@ -72,7 +72,7 @@ fn supports_flow_maps_and_retains_anchor_settings() {
     assert_eq!(parsed[0]["copy"]["enabled"].as_bool(), Some(true));
     assert_eq!(
         parsed[0]["packageExtensions"]["other@1"]["dependencies"]["existing"].as_str(),
-        Some("^1")
+        Some("^1"),
     );
 }
 

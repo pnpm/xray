@@ -70,8 +70,16 @@ fn reachable_files_inner(
         };
         let parent = file.parent().unwrap_or(package_dir);
         for (requirement, _origin) in found {
-            let scan::Requirement::Module(specifier) = requirement else {
-                continue;
+            let specifier = match requirement {
+                scan::Requirement::PathReference(specifier) => {
+                    match resolve_relative(parent, &specifier) {
+                        Some(target) if target.starts_with(&root) => queue.push(target),
+                        _ => {}
+                    }
+                    continue;
+                }
+                scan::Requirement::Module(specifier) => specifier,
+                scan::Requirement::TypesReference(_) => continue,
             };
             if specifier.starts_with('#') {
                 for target in manifest.import_targets(&specifier) {

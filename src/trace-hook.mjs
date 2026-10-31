@@ -11,11 +11,13 @@ if (typeof nodeModule.registerHooks !== 'function') {
     try {
       return nextResolve(specifier, context);
     } catch (error) {
-      if ((error?.code === 'MODULE_NOT_FOUND' || error?.code === 'ERR_MODULE_NOT_FOUND') &&
+      if ((error?.code === 'MODULE_NOT_FOUND' || error?.code === 'ERR_MODULE_NOT_FOUND' ||
+           error?.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED' ||
+           error?.code === 'ERR_PACKAGE_IMPORT_NOT_DEFINED') &&
           typeof context.parentURL === 'string' && context.parentURL.startsWith('file:')) {
         try {
           const parent = fileURLToPath(context.parentURL);
-          appendFileSync(process.env.XRAY_TRACE_FILE, JSON.stringify({ specifier, parent }) + '\n');
+          appendFileSync(process.env.XRAY_TRACE_FILE, JSON.stringify({ specifier, parent, code: error.code, message: String(error.message) }) + '\n');
         } catch {
           // Observability must not change the failure the program receives.
         }

@@ -5,7 +5,7 @@ use crate::{
     classify::{missing_package, types_package},
     manifest::Manifest,
     reachable::{reachable_files, reachable_files_for_repair},
-    report::{Evidence, Finding, PackageReport, Severity},
+    report::{Diagnostic, DiagnosticKind, Evidence, Finding, PackageReport, Severity},
     scan::{self, Origin},
 };
 use anyhow::{Context, Result};
@@ -29,16 +29,42 @@ pub enum Scope {
 
 /// What one installed package reaches for but never declared, or `None` when it
 /// declared everything its shipped files name.
+#[cfg(test)]
 pub fn analyze(package_dir: &Path, scope: Scope) -> Result<Option<PackageReport>> {
+    let outcome = analyze_with_diagnostics(package_dir, scope)?;
+    for diagnostic in &outcome.diagnostics {
+        if diagnostic.kind == DiagnosticKind::ReadError {
+            anyhow::bail!(
+                "reading source {}: {}",
+                package_dir.join(&diagnostic.file).display(),
+                diagnostic.message
+            );
+        }
+        eprintln!(
+            "warning: could not parse {}: {}",
+            package_dir.join(&diagnostic.file).display(),
+            diagnostic.message
+        );
+    }
+    Ok(outcome.report)
+}
+
+pub struct AnalysisOutcome {
+    pub report: Option<PackageReport>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Analyze without printing diagnostics, including failures in otherwise clean packages.
+pub fn analyze_with_diagnostics(package_dir: &Path, scope: Scope) -> Result<AnalysisOutcome> {
     analyze_inner(package_dir, scope, false)
 }
 
 /// Analyze a package for an automatic repair, rejecting incomplete scans.
 pub fn analyze_for_repair(package_dir: &Path, scope: Scope) -> Result<Option<PackageReport>> {
-    analyze_inner(package_dir, scope, true)
+    Ok(analyze_inner(package_dir, scope, true)?.report)
 }
 
-fn analyze_inner(package_dir: &Path, scope: Scope, strict: bool) -> Result<Option<PackageReport>> {
+fn analyze_inner(package_dir: &Path, scope: Scope, strict: bool) -> Result<AnalysisOutcome> {
     let manifest = Manifest::read(package_dir)?;
     let declared: HashSet<&str> = manifest.reachable().collect();
 
@@ -59,22 +85,35 @@ fn analyze_inner(package_dir: &Path, scope: Scope, strict: bool) -> Result<Optio
 
     let mut missing: BTreeMap<String, (Origin, BTreeSet<Evidence>)> = BTreeMap::new();
     let canonical_root = package_dir.canonicalize()?;
-    let mut unparsed = Vec::new();
+    let mut diagnostics = Vec::new();
     for file in files {
-        let source = std::fs::read_to_string(&file)
-            .with_context(|| format!("reading source {}", file.display()))?;
+        let canonical_file = file.canonicalize()?;
+        let relative = canonical_file.strip_prefix(&canonical_root).unwrap_or(&canonical_file);
+        let filename = relative.to_string_lossy().replace('\\', "/");
+        let source = match std::fs::read_to_string(&file) {
+            Ok(source) => source,
+            Err(error) if strict => {
+                return Err(error).with_context(|| format!("reading source {}", file.display()))
+            }
+            Err(error) => {
+                diagnostics.push(Diagnostic {
+                    package: manifest.id(),
+                    file: filename,
+                    message: error.to_string(),
+                    kind: DiagnosticKind::ReadError,
+                });
+                continue;
+            }
+        };
         match scan::references(&source, &file) {
             Ok(found) => {
-                let canonical_file = file.canonicalize()?;
-                let relative =
-                    canonical_file.strip_prefix(&canonical_root).unwrap_or(&canonical_file);
-                let filename = relative.to_string_lossy().replace('\\', "/");
                 let positions =
                     reference_positions(&source, found.iter().map(|(_, _, offset)| *offset));
                 for (requirement, origin, offset) in found {
                     let specifier = match &requirement {
                         scan::Requirement::Module(specifier)
-                        | scan::Requirement::TypesReference(specifier) => specifier,
+                        | scan::Requirement::TypesReference(specifier)
+                        | scan::Requirement::PathReference(specifier) => specifier,
                     };
                     let (line, column) = positions[&offset];
                     let evidence = Evidence {
@@ -112,13 +151,23 @@ fn analyze_inner(package_dir: &Path, scope: Scope, strict: bool) -> Result<Optio
                 }
             }
             Err(reason) if strict => anyhow::bail!("could not parse {}: {reason}", file.display()),
-            Err(reason) => unparsed.push((file, reason)),
+            Err(reason) => diagnostics.push(Diagnostic {
+                package: manifest.id(),
+                file: filename,
+                message: reason,
+                kind: DiagnosticKind::ParseError,
+            }),
         }
     }
-    for (file, reason) in &unparsed {
-        eprintln!("warning: could not parse {}: {reason}", file.display());
-    }
 
+    let report = build_report(&manifest, missing);
+    Ok(AnalysisOutcome { report, diagnostics })
+}
+
+fn build_report(
+    manifest: &Manifest,
+    missing: BTreeMap<String, (Origin, BTreeSet<Evidence>)>,
+) -> Option<PackageReport> {
     let findings: Vec<Finding> = missing
         .into_iter()
         .map(|(name, (origin, evidence))| Finding {
@@ -134,10 +183,7 @@ fn analyze_inner(package_dir: &Path, scope: Scope, strict: bool) -> Result<Optio
         })
         .collect();
 
-    if findings.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(PackageReport { package: manifest.id(), findings }))
+    (!findings.is_empty()).then(|| PackageReport { package: manifest.id(), findings })
 }
 
 /// Walk the source once, including for long minified lines with many references.

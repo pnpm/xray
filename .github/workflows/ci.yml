@@ -166,3 +166,4 @@ jobs:
     - run: cargo build --locked
     - run: node corpus/run.mjs
     - run: node corpus/install-test.mjs
+    - run: node corpus/safety-test.mjs

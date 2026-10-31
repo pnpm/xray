@@ -56,6 +56,12 @@ Output the findings as JSON:
 xray --json
 ```
 
+JSON uses a versioned envelope with `packages`, structured `diagnostics`,
+`packagesScanned`, and `complete`. A scan with parse or read diagnostics exits 2
+and sets `complete: false`, even when no dependency findings were produced.
+A complete scan exits 0; other command/configuration errors exit 1. Trace mode
+preserves the traced command's exit code instead.
+
 ## Observe computed imports
 
 Run a failing command through Node's resolution hooks (Node 22.15 or newer):
@@ -68,7 +74,17 @@ xray /path/to/project --trace -- node reproduce.cjs
 The command runs in the selected project and keeps its output and exit status.
 Xray reports failed resolutions from installed packages on stderr, including
 computed imports a static scan cannot name. Some failures are caught optional
-integrations, so these observations do not automatically become fixes. Workspace
+integrations, so tracing alone does not change workspace settings. To select
+repairs only for observed resolutions, combine it with `--fix`:
+
+```sh
+xray --trace --fix -- pnpm test
+pnpm install
+pnpm test
+```
+
+This preserves the original command failure status and links installed providers
+for the observed references; missing optional providers stay unselected. Workspace
 source failures and already-declared dependencies are excluded. Custom loaders or
 processes that replace `NODE_OPTIONS` can bypass the hook. Runtime observations
 include a filename and specifier; static findings also have line and column.
@@ -88,7 +104,8 @@ comments, unrelated settings and existing extensions. Conflicting settings are
 reported without writing the file. Running it twice does not duplicate entries.
 It scans declared entry points and their imports, including declarations; use
 `--fix --all-files` for deep imports outside that graph. A parse failure in that
-surface stops the repair so incomplete evidence cannot silently become a fix.
+surface excludes that entire package from repair and makes xray exit with code 2.
+Independent packages can still be repaired; excluded packages are listed on stderr.
 
 The planner uses portable author development ranges for missing type dependencies.
 It links existing runtime providers as optional peers, leaving unused integrations
@@ -156,7 +173,8 @@ package's surface whether its author meant that or not, and every one is read.
 
 Every file a package ships as behaviour or as types — `.js`, `.mjs`, `.cjs`,
 `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx` and the `.d.ts` family — parsed with
-[oxc](https://oxc.rs). Every position that names a module counts: `import` and
+[oxc](https://oxc.rs). Flow-marked files use the bundled official Flow parser
+through Node when their syntax is unsupported by oxc. Every position that names a module counts: `import` and
 `export … from`, `export *`, `require()` and `require.resolve()`, dynamic
 `import()`, type-position `import("pkg")`, `import x = require("pkg")`, and
 `/// <reference types="pkg" />`.

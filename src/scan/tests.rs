@@ -18,7 +18,7 @@ fn modules(source: &str) -> Vec<String> {
         .into_iter()
         .filter_map(|requirement| match requirement {
             Requirement::Module(specifier) => Some(specifier),
-            Requirement::TypesReference(_) => None,
+            Requirement::TypesReference(_) | Requirement::PathReference(_) => None,
         })
         .collect()
 }
@@ -83,13 +83,63 @@ fn reads_jsx_in_js_files() {
     assert_eq!(script(source, "index.js"), ["widget"]);
 }
 
+#[test]
+fn parses_flow_imports_and_tracks_original_utf8_positions() {
+    let source = "// @flow\nconst emoji = '🍀';\nimport type {A} from 'typed';\nimport value from 'runtime';\nexport * from 'exported';\nrequire('required');\n";
+    let found = crate::scan::references(source, Path::new("index.js")).unwrap();
+    for (specifier, origin) in [
+        ("typed", Origin::Types),
+        ("runtime", Origin::Runtime),
+        ("exported", Origin::Runtime),
+        ("required", Origin::Runtime),
+    ] {
+        let position = u32::try_from(source.find(&format!("'{specifier}'")).unwrap()).unwrap();
+        assert!(
+            found.contains(&(Requirement::Module(specifier.to_string()), origin, position)),
+            "{specifier}: {found:?}"
+        );
+    }
+}
+
+#[test]
+fn recognizes_flow_pragmas_in_block_comments() {
+    for comment in ["/** @flow */", "/**\n * @flow strict\n */"] {
+        let source =
+            format!("{comment}\nimport type {{A}} from 'typed';\nexport type X = {{| +x: A |}};");
+        assert!(crate::scan::references(&source, Path::new("index.js")).unwrap().contains(&(
+            Requirement::Module("typed".into()),
+            Origin::Types,
+            u32::try_from(source.find("'typed'").unwrap()).unwrap()
+        )));
+    }
+}
+
+#[test]
+fn parses_unmarked_flow_after_javascript_parser_fails() {
+    let source = "import type {Thing} from 'types-package';\nexport default function clone(value: Thing): Thing { return value; }";
+    let found = origins(source, "index.js");
+    assert!(found.contains(&(Requirement::Module("types-package".into()), Origin::Types)));
+}
+
+#[test]
+fn flow_shadowed_require_is_scoped_and_syntax_errors_are_not_silenced() {
+    let source = "// @flow\nrequire('outer'); function f(require) { require('hidden'); } { require('also-hidden'); let require = custom; } function g() { require('hoisted'); { var require = custom; } }";
+    assert_eq!(script(source, "index.js"), ["outer"]);
+    assert!(crate::scan::references("// @flow\nexport const = ;", Path::new("index.js")).is_err());
+    assert!(crate::scan::references(
+        "// @flow\nconst require = createRequire(url); require('x');",
+        Path::new("index.js")
+    )
+    .is_err());
+}
+
 fn script(source: &str, name: &str) -> Vec<String> {
     specifiers(source, Path::new(name))
         .unwrap()
         .into_iter()
         .filter_map(|(requirement, _origin)| match requirement {
             Requirement::Module(specifier) => Some(specifier),
-            Requirement::TypesReference(_) => None,
+            Requirement::TypesReference(_) | Requirement::PathReference(_) => None,
         })
         .collect()
 }
@@ -159,6 +209,12 @@ fn triple_slash_text_inside_a_block_comment_is_not_a_reference() {
 }
 
 #[test]
+fn triple_slash_directives_are_only_recognized_before_statements() {
+    let source = "/// description <reference types=\"fake\" />\n/// <reference types=\"real\" />\nexport {};\n/// <reference types=\"late\" />\n";
+    assert_eq!(found(source), [Requirement::TypesReference("real".to_string())]);
+}
+
+#[test]
 fn normalization_does_not_scan_comment_content_as_code() {
     let source = "/*\nexport = function pretend(): void;\nimport 'fake';\n*/\nimport 'real';\nexport = function actual(): void;";
     assert_eq!(script(source, "index.d.cts"), ["real"]);
@@ -173,9 +229,15 @@ export default x;";
 }
 
 #[test]
-fn triple_slash_references_are_only_read_from_declarations() {
+fn triple_slash_references_are_read_from_typescript_but_not_javascript() {
     let source = "/// <reference types=\"node\" />\nmodule.exports = {};\n";
     assert!(specifiers(source, Path::new("index.js")).unwrap().is_empty());
+    for extension in ["ts", "tsx", "mts", "cts"] {
+        let path = format!("index.{extension}");
+        assert!(specifiers(source, Path::new(&path))
+            .unwrap()
+            .contains(&(Requirement::TypesReference("node".into()), Origin::Types)));
+    }
 }
 
 #[test]
@@ -190,7 +252,7 @@ fn erased_positions_are_type_only_wherever_they_appear() {
         .into_iter()
         .filter_map(|(requirement, origin)| match requirement {
             Requirement::Module(specifier) => Some((specifier, origin)),
-            Requirement::TypesReference(_) => None,
+            Requirement::TypesReference(_) | Requirement::PathReference(_) => None,
         })
         .collect();
     assert_eq!(

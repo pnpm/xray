@@ -18,6 +18,21 @@ function checked(command, args, cwd) {
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed (${result.status}):\n${result.stdout}\n${result.stderr}`)
   return result.stdout
 }
+function scan(root, targetPackage) {
+  const result = run(binary, ['--json', root], root)
+  if (result.status !== 0 && result.status !== 2) throw new Error(`project scan failed (${result.status}): ${result.stderr}`)
+  const output = JSON.parse(result.stdout)
+  if (output.schemaVersion !== 1 || !Array.isArray(output.packages) || !Array.isArray(output.diagnostics) || output.complete !== (result.status === 0)) throw new Error(`inconsistent project scan envelope: ${result.stdout}`)
+  if (output.diagnostics.some((diagnostic) => diagnostic.package === targetPackage)) throw new Error(`target package analysis incomplete: ${JSON.stringify(output.diagnostics)}`)
+  if (output.diagnostics.length) console.log(`  project scan has unrelated diagnostics: ${JSON.stringify(output.diagnostics)}`)
+  return output.packages
+}
+function assertRepaired(root, packageId, dependency) {
+  const reports = scan(root, packageId)
+  if (reports.some((report) => report.package === packageId && report.findings.some((finding) => finding.dependency === dependency))) {
+    throw new Error(`${packageId} still reports repaired dependency ${dependency}`)
+  }
+}
 async function applyFix(root, expected) {
   const workspace = join(root, 'pnpm-workspace.yaml')
   const before = await readFile(workspace, 'utf8')
@@ -47,7 +62,7 @@ try {
     await writeFile(join(app, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'es2022', module: 'nodenext', moduleResolution: 'nodenext', noEmit: true }, include: ['index.ts', 'types.d.ts'] }))
     checked('pnpm', ['install', '--ignore-scripts'], root)
     const core = join(app, 'node_modules/@medplum/core')
-    const reports = JSON.parse(checked(binary, ['--json', root], root))
+    const reports = scan(root, '@medplum/core@5.2.13')
     if (!reports.some((report) => report.package === '@medplum/core@5.2.13' && report.findings.some((finding) => finding.dependency === '@medplum/fhirtypes'))) {
       throw new Error(`${label}: root project scan missed @medplum/core in the workspace`)
     }
@@ -64,6 +79,7 @@ try {
     await applyFix(root, '@medplum/fhirtypes')
     checked('pnpm', ['install', '--ignore-scripts', '--no-frozen-lockfile'], root)
     checked(tsc, ['--noEmit'], app)
+    assertRepaired(root, '@medplum/core@5.2.13', '@medplum/fhirtypes')
     console.log(`PASS ${label}: missing declaration fails before generated extension and typechecks afterward`)
 
     const runtimeRoot = join(temp, globalStore ? 'runtime-global' : 'runtime-isolated')
@@ -79,7 +95,7 @@ try {
 `)
     checked('pnpm', ['install', '--ignore-scripts'], runtimeRoot)
     const consolidate = join(runtimeApp, 'node_modules/@vue/consolidate')
-    const runtimeReports = JSON.parse(checked(binary, ['--json', runtimeRoot], runtimeRoot))
+    const runtimeReports = scan(runtimeRoot, '@vue/consolidate@1.0.0')
     if (!runtimeReports.some((report) => report.package === '@vue/consolidate@1.0.0' && report.findings.some((finding) => finding.dependency === 'pug'))) {
       throw new Error(`${label}: root project scan missed @vue/consolidate in the workspace`)
     }
@@ -93,9 +109,19 @@ try {
     }
     const runtimeExtension = checked(binary, ['--package-extensions', '--package', consolidate], runtimeRoot)
     if (!runtimeExtension.includes("'pug'")) throw new Error(`${label}: extension did not include pug`)
-    await applyFix(runtimeRoot, 'pug')
+    const beforeTraceFix = await readFile(runtimeWorkspace, 'utf8')
+    const traceArgs = [runtimeRoot, '--trace', '--fix', '--', process.execPath, 'packages/app/render.cjs']
+    const traceDry = run(binary, [runtimeRoot, '--trace', '--fix', '--dry-run', '--', process.execPath, 'packages/app/render.cjs'], runtimeRoot)
+    if (traceDry.status !== beforeRender.status || !traceDry.stdout.includes("'pug'") || await readFile(runtimeWorkspace, 'utf8') !== beforeTraceFix) throw new Error(`${label}: traced dry run did not select pug without writing: ${traceDry.stdout}\n${traceDry.stderr}`)
+    const tracedFix = run(binary, traceArgs, runtimeRoot)
+    if (tracedFix.status !== beforeRender.status) throw new Error(`${label}: trace fix changed child exit status: ${tracedFix.status}`)
+    const afterTraceFix = await readFile(runtimeWorkspace, 'utf8')
+    if (!afterTraceFix.includes("'pug'") || afterTraceFix.includes('then-pug') || !afterTraceFix.includes('# corpus settings comment')) throw new Error(`${label}: trace fix chose unexpected dependencies or lost settings: ${afterTraceFix}`)
+    const repeatTraceFix = run(binary, traceArgs, runtimeRoot)
+    if (repeatTraceFix.status !== beforeRender.status || await readFile(runtimeWorkspace, 'utf8') !== afterTraceFix) throw new Error(`${label}: trace fix was not idempotent`)
     checked('pnpm', ['install', '--ignore-scripts', '--no-frozen-lockfile'], runtimeRoot)
     checked(process.execPath, ['render.cjs'], runtimeApp)
+    assertRepaired(runtimeRoot, '@vue/consolidate@1.0.0', 'pug')
     const afterTrace = run(binary, [runtimeRoot, '--trace', '--', process.execPath, 'packages/app/render.cjs'], runtimeRoot)
     if (afterTrace.status !== 0 || afterTrace.stderr.includes('Observed failed Node resolutions')) throw new Error(`${label}: traced command still fails after repair:\n${afterTrace.stdout}\n${afterTrace.stderr}`)
     console.log(`PASS ${label}: trace observes missing runtime pug; repair makes the traced command succeed`)
@@ -118,6 +144,7 @@ try {
     await applyFix(volarRoot, '@volar/language-service')
     checked('pnpm', ['install', '--ignore-scripts', '--no-frozen-lockfile'], volarRoot)
     checked(volarTsc, ['--noEmit'], volarApp)
+    assertRepaired(volarRoot, '@volar/typescript@2.4.28', '@volar/language-service')
     console.log(`PASS ${label}: missing Volar declaration fails before generated extension and typechecks afterward`)
 
     const jssRoot = join(temp, globalStore ? 'jss-global' : 'jss-isolated')
@@ -137,6 +164,7 @@ try {
     await applyFix(jssRoot, 'tiny-warning')
     checked('pnpm', ['install', '--ignore-scripts', '--no-frozen-lockfile'], jssRoot)
     checked(process.execPath, ['load.cjs'], jssApp)
+    assertRepaired(jssRoot, 'jss-plugin-rule-value-function@10.1.1', 'tiny-warning')
     console.log(`PASS ${label}: undeclared runtime import fails before generated extension and loads afterward`)
 
     const rollupRoot = join(temp, globalStore ? 'rollup-global' : 'rollup-isolated')
@@ -155,6 +183,7 @@ try {
     if (fixedRollup.includes("'estree':")) throw new Error(`${label}: repair guessed an estree runtime dependency`)
     checked('pnpm', ['install', '--ignore-scripts', '--no-frozen-lockfile'], rollupRoot)
     checked(rollupTsc, ['--noEmit'], rollupApp)
+    assertRepaired(rollupRoot, '@rollup/plugin-dynamic-import-vars@2.1.4', 'estree')
     console.log(`PASS ${label}: missing @types provider fails before repair and typechecks afterward`)
   }
 } finally {

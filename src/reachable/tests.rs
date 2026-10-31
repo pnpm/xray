@@ -40,6 +40,48 @@ fn javascript_entries_and_their_children_include_declaration_companions() {
 }
 
 #[test]
+fn triple_slash_paths_follow_declaration_files_and_stop_at_package_boundary() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest("pkg", r#","exports":"./index.js","types":"./index.d.ts""#),
+    );
+    write(&dir.join("index.js"), "module.exports = 1;");
+    write(&dir.join("index.d.ts"), "/// <reference path=\"types/a.d.ts\" />\n/// <reference path=\"./types/b.d.ts\" />\n/// <reference path=\"../outside.d.ts\" />\nexport {};\n");
+    write(
+        &dir.join("types/a.d.ts"),
+        "/// <reference path=\"../index.d.ts\" />\nimport 'missing-a';\n",
+    );
+    write(&dir.join("types/b.d.ts"), "import 'missing-b';\n");
+    write(&root.path().join("outside.d.ts"), "import 'not-ours';\n");
+    assert_eq!(names(&dir), ["index.d.ts", "index.js", "types/a.d.ts", "types/b.d.ts"]);
+    let report =
+        crate::analyze::analyze_for_repair(&dir, crate::analyze::Scope::Declared).unwrap().unwrap();
+    assert_eq!(
+        report.findings.iter().map(|finding| finding.dependency.as_str()).collect::<Vec<_>>(),
+        ["missing-a", "missing-b"]
+    );
+    assert_eq!(report.findings[0].evidence.first().unwrap().file, "types/a.d.ts");
+}
+
+#[test]
+fn typescript_source_entry_follows_reference_directives() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","exports":"./index.ts""#));
+    write(&dir.join("index.ts"), "/// <reference types=\"missing-types\" />\n/// <reference path=\"hidden.ts\" />\nexport const value = 1;\n");
+    write(&dir.join("hidden.ts"), "import 'runtime-missing';\n");
+    let report =
+        crate::analyze::analyze_for_repair(&dir, crate::analyze::Scope::Declared).unwrap().unwrap();
+    assert_eq!(report.findings.len(), 2);
+    assert_eq!(report.findings[0].dependency, "@types/missing-types");
+    assert_eq!(report.findings[0].origin, crate::scan::Origin::Types);
+    assert_eq!(report.findings[1].dependency, "runtime-missing");
+    assert_eq!(report.findings[1].origin, crate::scan::Origin::Runtime);
+}
+
+#[test]
 fn types_versions_entries_do_not_hide_the_default_javascript_entry() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("pkg");
