@@ -60,7 +60,7 @@ fn reachable_files_inner(
                 queue.push(companion);
             }
         }
-        let source = match std::fs::read_to_string(&file) {
+        let source = match scan::read_source(&file) {
             Ok(source) => source,
             Err(error) if strict => {
                 return Err(error).with_context(|| format!("reading source {}", file.display()))

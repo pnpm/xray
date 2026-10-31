@@ -19,6 +19,22 @@ use std::{
     process::{Command, Stdio},
 };
 
+/// Node decodes JavaScript as UTF-8 with replacement for invalid bytes.
+/// Preserve that behavior for published scripts while keeping other formats strict.
+pub fn read_source(path: &Path) -> std::io::Result<String> {
+    let bytes = std::fs::read(path)?;
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| matches!(extension, "js" | "cjs" | "mjs"))
+    {
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    } else {
+        String::from_utf8(bytes)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+    }
+}
+
 /// Every module specifier a file asks for.
 ///
 /// In a declaration file that includes positions which never execute —

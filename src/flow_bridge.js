@@ -3,7 +3,30 @@
 const fs = require('fs');
 const parser = require(process.argv[1]);
 const source = fs.readFileSync(0, 'utf8');
-const ast = parser.parse(source, { types: true, enums: true });
+let ast = parser.parse(source, { types: true, enums: true });
+if (ast.errors.length) {
+  // Some transpilers place a Flow return-type comment after the arrow. Flow's
+  // parser interprets that comment in an invalid position, although Node treats
+  // it as an ordinary comment. Validate that comment as a type separately,
+  // then hide only its colon while retaining every other Flow type comment.
+  const javascript = parser.parse(source, { types: false, tokens: true, enums: true });
+  if (!javascript.errors.length) {
+    const chars = source.split('');
+    let changed = false;
+    let tokenIndex = 0;
+    for (const comment of javascript.comments) {
+      while (tokenIndex < javascript.tokens.length && javascript.tokens[tokenIndex].range[1] <= comment.range[0]) tokenIndex++;
+      if (comment.type !== 'Block' || !comment.value.startsWith(':') || comment.value.startsWith('::')) continue;
+      const before = javascript.tokens[tokenIndex - 1];
+      if (before?.type !== 'T_ARROW') continue;
+      const type = parser.parse(`type __Xray = ${comment.value.slice(1)};`, { types: true, tokens: true });
+      if (type.errors.length || type.tokens.some(token => token.type === 'T_IMPORT')) continue;
+      chars[comment.range[0] + 2] = ' ';
+      changed = true;
+    }
+    if (changed) ast = parser.parse(chars.join(''), { types: true, enums: true });
+  }
+}
 if (ast.errors.length) throw new Error(ast.errors.map(error => error.message).join('; '));
 const found = [];
 // Collect lexical bindings before visiting calls so hoisted and later

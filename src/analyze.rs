@@ -71,7 +71,7 @@ fn analyze_inner(package_dir: &Path, scope: Scope, strict: bool) -> Result<Analy
         let canonical_file = file.canonicalize()?;
         let relative = canonical_file.strip_prefix(&canonical_root).unwrap_or(&canonical_file);
         let filename = relative.to_string_lossy().replace('\\', "/");
-        let source = match std::fs::read_to_string(&file) {
+        let source = match scan::read_source(&file) {
             Ok(source) => source,
             Err(error) if strict => {
                 return Err(error).with_context(|| format!("reading source {}", file.display()))

@@ -37,3 +37,15 @@ fn parses_legacy_ie_star_properties_without_changing_reference_offsets() {
     assert_eq!(references[0].offset, source.find("'pkg/style.css'").unwrap());
     assert!(parse(Path::new("legacy.css"), "a { *zoom: ; @import ; }").is_err());
 }
+
+#[test]
+fn parses_interpolated_custom_property_without_losing_imports() {
+    let source = r#"@use 'real-package'; a { --icon: url("data:image/svg+xml,stroke='#{to-rgb($white)}'%3E"); } @forward 'other-package';"#;
+    let refs = parse(Path::new("test.scss"), source).unwrap();
+    assert_eq!(
+        refs.iter().map(|item| item.specifier.as_str()).collect::<Vec<_>>(),
+        ["real-package", "other-package"],
+    );
+    assert_eq!(refs[1].offset, source.find("'other-package'").unwrap());
+    assert!(parse(Path::new("test.scss"), r##"a { --x: "#{oops(}"; } @use ;"##).is_err());
+}

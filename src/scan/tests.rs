@@ -457,3 +457,16 @@ fn inline_type_specifiers_are_read_as_runtime() {
         );
     }
 }
+
+#[test]
+fn flow_return_comments_after_arrow_preserve_type_imports() {
+    let source = "// @flow\n/*:: import type { Item } from 'type-provider'; */\nconst get = (x /*: Item */) => /*: Item */ x;\nrequire('runtime-provider');";
+    let references = crate::scan::references(source, Path::new("index.js")).unwrap();
+    assert!(references.iter().any(|(reference, origin, _)| matches!(reference, crate::scan::Requirement::Module(name) if name == "type-provider") && *origin == crate::scan::Origin::Types));
+    assert!(references.iter().any(|(reference, origin, _)| matches!(reference, crate::scan::Requirement::Module(name) if name == "runtime-provider") && *origin == crate::scan::Origin::Runtime));
+    assert!(crate::scan::references(
+        "// @flow\nconst f = () => /*: ??? */ 1;",
+        Path::new("index.js")
+    )
+    .is_err());
+}

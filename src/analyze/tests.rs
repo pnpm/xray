@@ -397,8 +397,22 @@ fn unreadable_source_cannot_be_reported_as_clean() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("package.json"), r#"{"name":"example","version":"1.0.0"}"#)
         .unwrap();
-    std::fs::write(root.path().join("index.js"), [0xff, 0xfe]).unwrap();
+    std::fs::write(root.path().join("index.ts"), [0xff, 0xfe]).unwrap();
     let error = analyze(root.path(), Scope::Declared).unwrap_err().to_string();
     assert!(error.contains("reading source"), "{error}");
-    assert!(error.contains("index.js"), "{error}");
+    assert!(error.contains("index.ts"), "{error}");
+}
+
+#[test]
+fn javascript_invalid_utf8_is_decoded_like_node_and_dependencies_are_found() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("package.json"), r#"{"name":"example","version":"1.0.0"}"#)
+        .unwrap();
+    std::fs::write(
+        root.path().join("index.js"),
+        b"const name = '\xe8'; require('missing-package');",
+    )
+    .unwrap();
+    let report = analyze(root.path(), Scope::Declared).unwrap().unwrap();
+    assert!(report.findings.iter().any(|finding| finding.dependency == "missing-package"));
 }

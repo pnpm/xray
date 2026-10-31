@@ -40,6 +40,14 @@ pub fn parse(path: &Path, source: &str) -> Result<Vec<StyleReference>, String> {
                 parse_source(&normalized, syntax).map_err(|_| original_error)
             }
         }
+        Err(original_error) if syntax == Syntax::Scss => {
+            let normalized = normalize_custom_properties(source);
+            if normalized == source {
+                Err(original_error)
+            } else {
+                parse_source(&normalized, syntax).map_err(|_| original_error)
+            }
+        }
         Err(error) => Err(error),
     }
 }
@@ -53,6 +61,85 @@ fn parse_source(source: &str, syntax: Syntax) -> Result<Vec<StyleReference>, Str
     let mut references = Vec::new();
     collect(&ast.statements, &mut references);
     Ok(references)
+}
+
+/// Raffia mishandles interpolation in strings inside custom property values.
+/// Parse those declarations as ordinary properties on retry. Their values do
+/// not contain stylesheet import rules; preserve all byte offsets and syntax.
+fn normalize_custom_properties(source: &str) -> String {
+    let mut bytes = source.as_bytes().to_vec();
+    let mut index = 0;
+    let mut previous = 0;
+    let mut quote = None;
+    let mut block_comment = false;
+    let mut line_comment = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if block_comment {
+            if byte == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                block_comment = false;
+                index += 2;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+        if line_comment {
+            if byte == b'\n' {
+                line_comment = false;
+            }
+            index += 1;
+            continue;
+        }
+        if let Some(delimiter) = quote {
+            if byte == b'\\' {
+                index += 2;
+                continue;
+            }
+            if byte == delimiter {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            block_comment = true;
+            index += 2;
+            continue;
+        }
+        if byte == b'/' && bytes.get(index + 1) == Some(&b'/') {
+            line_comment = true;
+            index += 2;
+            continue;
+        }
+        if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+            previous = byte;
+            index += 1;
+            continue;
+        }
+        if byte == b'-' && bytes.get(index + 1) == Some(&b'-') && matches!(previous, b'{' | b';') {
+            let mut end = index + 2;
+            while bytes.get(end).is_some_and(|character| {
+                character.is_ascii_alphanumeric() || matches!(*character, b'-' | b'_')
+            }) {
+                end += 1;
+            }
+            let mut colon = end;
+            while bytes.get(colon).is_some_and(u8::is_ascii_whitespace) {
+                colon += 1;
+            }
+            if end > index + 2 && bytes.get(colon) == Some(&b':') {
+                bytes[index] = b'x';
+                bytes[index + 1] = b'x';
+            }
+        }
+        if !byte.is_ascii_whitespace() {
+            previous = byte;
+        }
+        index += 1;
+    }
+    String::from_utf8(bytes).expect("replacing ASCII preserves UTF-8")
 }
 
 /// Old IE accepted `*property: value`. Replace the star with a space only in
