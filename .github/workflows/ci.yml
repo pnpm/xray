@@ -58,6 +58,13 @@ jobs:
         install: false
     - run: cargo test --locked
     - run: cargo build --locked
+    - name: Test packaged launcher offline
+      shell: bash
+      run: |
+        target="$(node -p '`${process.platform}-${process.arch}`')"
+        binary=target/debug/xray
+        if [[ "$target" == win32-* ]]; then binary="$binary.exe"; fi
+        node scripts/package-smoke.mjs "$target" "$binary"
     - name: Prepare declaration repair compiler
       run: node -e "const fs=require('node:fs'); fs.mkdirSync(process.env.XRAY_SMOKE_DIR,{recursive:true}); fs.writeFileSync(require('node:path').join(process.env.XRAY_SMOKE_DIR,'package.json'),JSON.stringify({private:true}));"
       env:
@@ -68,6 +75,7 @@ jobs:
       run: |
         node corpus/path-test.mjs
         node --test corpus/regenerate-source.test.mjs
+        cargo test --locked verify_types
       env:
         XRAY_TYPESCRIPT: ${{ runner.temp }}/xray-smoke-deps/node_modules/typescript
 
@@ -90,6 +98,26 @@ jobs:
       run: cargo zigbuild --locked --release --target x86_64-unknown-linux-gnu.2.28
     - name: Verify ABI and Flow parser
       run: scripts/check-gnu-abi.sh target/x86_64-unknown-linux-gnu/release/xray
+
+  musl-package:
+    name: musl npm package
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        key: x86_64-unknown-linux-musl
+    - run: rustup target add x86_64-unknown-linux-musl
+    - run: sudo apt-get update && sudo apt-get install -y musl-tools
+    - run: cargo build --locked --release --target x86_64-unknown-linux-musl
+    - name: Test packaged launcher in Alpine
+      run: |
+        docker run --rm --network=none -v "$PWD:/work:ro" -w /work \
+          node@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 \
+          node scripts/package-smoke.mjs linux-x64-musl target/x86_64-unknown-linux-musl/release/xray
 
   test-status:
     name: Test
@@ -220,3 +248,23 @@ jobs:
     - run: node corpus/run.mjs target/release/xray
     - run: node corpus/install-test.mjs target/release/xray
     - run: node corpus/safety-test.mjs target/release/xray
+    - run: node corpus/evaluation/run.mjs target/release/xray
+
+  verified-repair:
+    name: Verified repair and recovery loop
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - name: Checkout Commit
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+    - name: Install pnpm
+      uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
+      with:
+        version: 12.16.1
+        runtime: node@24
+        install: false
+    - run: cargo build --locked --release
+    - run: node corpus/verify-loop.mjs target/release/xray
