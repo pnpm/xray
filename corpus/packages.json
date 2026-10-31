@@ -1,0 +1,393 @@
+[
+  {
+    "name": "@medplum/core",
+    "version": "5.2.13",
+    "url": "https://registry.npmjs.org/@medplum/core/-/core-5.2.13.tgz",
+    "sha512": "880721177d05eb3fa2cb3ab15387311b6e957fb8e5b8c89cd637208f2390ff0742906f2e9f1d80767e41dc422cd60ba64695cf0e4aa0a1f9cfa34ca17990b9a9",
+    "expected": [
+      {
+        "dependency": "@medplum/fhirtypes",
+        "severity": "devDependency",
+        "origin": "types",
+        "declaredRange": "5.2.13"
+      }
+    ],
+    "evidence": "The published declaration files import @medplum/fhirtypes, but the published manifest lists it only in devDependencies.",
+    "maxDiagnosticLines": 0,
+    "notExpected": [
+      "pdfmake",
+      "node:crypto"
+    ]
+  },
+  {
+    "name": "@docusaurus/core",
+    "version": "3.10.2",
+    "url": "https://registry.npmjs.org/@docusaurus/core/-/core-3.10.2.tgz",
+    "sha512": "1180728fa9e4f9a0fd29e57157a1e6a36fe70004fbf4fdb563cdb271304e06dae6aa2965a086c812180bdbff17a6dd89cffa6036a1c0c32bac386c266ca78998",
+    "expected": [
+      {
+        "dependency": "@docusaurus/types",
+        "severity": "devDependency",
+        "origin": "types",
+        "declaredRange": "3.10.2"
+      }
+    ],
+    "evidence": "Published declarations import @docusaurus/types, which is listed only in devDependencies. This package also exercises generated and bundler aliases and JSX in .js files.",
+    "maxDiagnosticLines": 0
+  },
+  {
+    "name": "@vue/consolidate",
+    "version": "1.0.0",
+    "url": "https://registry.npmjs.org/@vue/consolidate/-/consolidate-1.0.0.tgz",
+    "sha512": "a13c9413e4072332f0d8fa55d78183fdcec4a210f23fae310a78964dca9c1264ddebdf5e16a4c8c0e9ad0d88dc3b58f7420757a091285afd7f70274bad1a0e7e",
+    "expected": [
+      {
+        "dependency": "pug",
+        "severity": "devDependency",
+        "origin": "runtime",
+        "declaredRange": "^3.0.0"
+      }
+    ],
+    "evidence": "The pug render adapter requires pug at runtime, but pug appears only in devDependencies.",
+    "maxDiagnosticLines": 0
+  },
+  {
+    "name": "@jridgewell/remapping",
+    "version": "2.3.5",
+    "url": "https://registry.npmjs.org/@jridgewell/remapping/-/remapping-2.3.5.tgz",
+    "sha512": "2c8f6effe95a606e03b354c3292256d983eb22571560ec22d9f502eb1078de5b9e0a383157895f7ce0990ad605887e9334e5feb50297c7ded3e082876e1c8711",
+    "expected": [],
+    "maxFindings": 0,
+    "maxDiagnosticLines": 0,
+    "evidence": "Published declaration files exercise TypeScript declaration parsing; its runtime dependencies are declared."
+  },
+  {
+    "name": "is-number",
+    "version": "7.0.0",
+    "url": "https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz",
+    "sha512": "e350a27e483a7bc4f2952a5db53a5e2d532abd20445734edb47bc4443ef8d7ea6767c00dbf4d34e0c44be3740a3c394af5c1af369e8d6566540656c65d8c719e",
+    "expected": [],
+    "maxFindings": 0,
+    "maxDiagnosticLines": 0,
+    "evidence": "A dependency-free CommonJS package; a finding would be a false positive."
+  },
+  {
+    "name": "nanoid",
+    "version": "5.1.6",
+    "url": "https://registry.npmjs.org/nanoid/-/nanoid-5.1.6.tgz",
+    "sha512": "73bfbb450f9d301e5d3f0c02a7879ed7f895fead8fe9a2b599365c7ebd414ee565c96f6125888c3f26c909c9c1950b6e4a64c858d79ace6ff3a8da1949212506",
+    "expected": [],
+    "maxFindings": 0,
+    "maxDiagnosticLines": 0,
+    "evidence": "ES module package using node builtins and relative imports; neither requires an npm dependency."
+  },
+  {
+    "name": "@volar/typescript",
+    "version": "2.4.28",
+    "url": "https://registry.npmjs.org/@volar/typescript/-/typescript-2.4.28.tgz",
+    "sha512": "25aeb2bd6adb8acd90b4de029402ab79e5193d560c0110d8665f4b304bf5890d5075ea41eb09f48d347103d31fb589986b80d0e24fc369266914f51fc65f208b",
+    "expected": [
+      {
+        "dependency": "@volar/language-service",
+        "severity": "devDependency",
+        "origin": "types",
+        "declaredRange": "2.4.28"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The published declaration createSys.d.ts imports @volar/language-service, declared only in devDependencies."
+  },
+  {
+    "name": "jss-plugin-rule-value-function",
+    "version": "10.1.1",
+    "url": "https://registry.npmjs.org/jss-plugin-rule-value-function/-/jss-plugin-rule-value-function-10.1.1.tgz",
+    "sha512": "0a557596f27795a53d95ad42533683ba011cc27a633d3b89d321b2d98b5c53e806ff0f473089c3e6f12fef1280cf9dc19385a2266e6e2ce125484b211f284a37",
+    "expected": [
+      {
+        "dependency": "tiny-warning",
+        "severity": "undeclared",
+        "origin": "runtime"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The CommonJS entry directly requires tiny-warning, omitted from the manifest; src/index.js contains Flow, which must parse without a diagnostic."
+  },
+  {
+    "name": "@rollup/plugin-dynamic-import-vars",
+    "version": "2.1.4",
+    "url": "https://registry.npmjs.org/@rollup/plugin-dynamic-import-vars/-/plugin-dynamic-import-vars-2.1.4.tgz",
+    "sha512": "319481fa5052a9388c684f79fcad79f5b4507156d0ba03335792db5d08059238cf3025c5ab57605472fbcece9d882a3012f895c50ffa0071cb98303554318623",
+    "expected": [
+      {
+        "dependency": "estree",
+        "severity": "undeclared",
+        "origin": "types"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "Shipped declarations import estree. Real consumers require @types/estree; an optional peer on estree does not repair the missing type dependency."
+  },
+  {
+    "name": "unenv",
+    "version": "2.0.0-rc.24",
+    "url": "https://registry.npmjs.org/unenv/-/unenv-2.0.0-rc.24.tgz",
+    "sha512": "8bba910a6638db3982c2762587d1f64af2c4ca91051b27b989198430a8dc1a2ef393d52aba28118c5b532f3d1362aaf46462d985a30797f7e8cb56d947e0b097",
+    "expected": [],
+    "maxDiagnosticLines": 2,
+    "expectedDiagnostics": [
+      "dist/runtime/node/constants.d.mts",
+      "dist/runtime/node/process.d.mts"
+    ],
+    "evidence": "Two shipped declaration files are rejected by the current parser. This case records incomplete analysis; it does not assert a repair.",
+    "expectedIncomplete": true
+  },
+  {
+    "name": "@material/button",
+    "version": "14.0.0",
+    "url": "https://registry.npmjs.org/@material/button/-/button-14.0.0.tgz",
+    "sha512": "76aa87689ab4a5ec97059ba91730a39af49cadf963c9553ae99092de895db1a6a3e62cfcb27df723fe39678ccfcdd479179cfc1314e81e445c5e16a48f550400",
+    "expected": [
+      {
+        "dependency": "@material/base"
+      },
+      {
+        "dependency": "@material/animation"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The published mdc-button.import.scss forwards @material/base/mixins and @material/animation/variables but neither package is declared."
+  },
+  {
+    "name": "typed-array-byte-length",
+    "version": "1.0.3",
+    "url": "https://registry.npmjs.org/typed-array-byte-length/-/typed-array-byte-length-1.0.3.tgz",
+    "sha512": "05a5e03ae231cfc9fca48ab77bb02d83feecf83a6262bc67e2f768b77c3d29b9c185c450abaa37c5e9907487f29ea49e5de0eb177db1f96bdfce63a33e263d96",
+    "expected": [
+      {
+        "dependency": "available-typed-arrays",
+        "severity": "devDependency",
+        "origin": "runtime",
+        "declaredRange": "^1.0.7"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The published CommonJS entry requires available-typed-arrays, listed only in devDependencies. Candidate independently checked after finding it in the public nubjs package-extensions dataset."
+  },
+  {
+    "name": "@firebase/analytics-types",
+    "version": "0.8.5",
+    "url": "https://registry.npmjs.org/@firebase/analytics-types/-/analytics-types-0.8.5.tgz",
+    "sha512": "91d9e8a04ec18acda3127b2a71ead1c27fd44291f90f7baf1e992eece75433d4c9377a2696eea262d6f2010e97900251809b4ed1a35ff4e3a45bc27a0f9f6808",
+    "expected": [
+      {
+        "dependency": "@firebase/app-types",
+        "severity": "undeclared",
+        "origin": "types"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "Published index.d.ts imports @firebase/app-types but the manifest has no declaration or author-provided range. Candidate independently checked after finding it in the public nubjs package-extensions dataset."
+  },
+  {
+    "name": "coinstring",
+    "version": "2.0.0",
+    "url": "https://registry.npmjs.org/coinstring/-/coinstring-2.0.0.tgz",
+    "sha512": "6686e6cee99938880d5ff6627a31d9415cc46ec5f3df4c4b2119136d9396f14adc826de258664f4ac2eadbb37bfcb136fb4fd488547e4c86ea5f91d124b57a9f",
+    "expected": [
+      {
+        "dependency": "crypto-browserify",
+        "origin": "runtime",
+        "severity": "devDependency",
+        "declaredRange": "^2.1.8"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The browser map replaces the used crypto builtin with crypto-browserify, which is only a devDependency."
+  },
+  {
+    "name": "stream",
+    "version": "0.0.3",
+    "url": "https://registry.npmjs.org/stream/-/stream-0.0.3.tgz",
+    "sha512": "68cb1b9fb54aae5e00d93ed001041bce037b35573bd2f805e48350ac15ea9f87425cdd73cb72fd1c680b3b9b3b3c4c6676bcd327cb91ff6edabe25bca2bf3ff8",
+    "expected": [],
+    "notExpected": [
+      "emitter-component"
+    ],
+    "maxFindings": 0,
+    "maxDiagnosticLines": 0,
+    "evidence": "The browser map names emitter-component for an unused emitter specifier; its actual require is component-emitter, which is declared."
+  },
+  {
+    "name": "@eslint-community/eslint-utils",
+    "version": "4.10.1",
+    "url": "https://registry.npmjs.org/@eslint-community/eslint-utils/-/eslint-utils-4.10.1.tgz",
+    "sha512": "72e69d73154513cb032ba89625bb3c4a7d1abf636b8764121908559415bd01a007a87c235ac6474fc2c9e211463e1ec048157675e15d33b1ff0cf8ee96687cae",
+    "expected": [
+      {
+        "dependency": "@types/estree",
+        "origin": "types",
+        "severity": "devDependency",
+        "declaredRange": "^1.0.8"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The published declaration imports estree while @types/estree is only a devDependency. Independently validated as a Vite workspace discovery candidate."
+  },
+  {
+    "name": "@humanfs/node",
+    "version": "0.16.6",
+    "url": "https://registry.npmjs.org/@humanfs/node/-/node-0.16.6.tgz",
+    "sha512": "62e23664740befc4391db8438810355f82e661d5c228231021fc34a70ee9887270c9110579b254beb40de1c32cb32112eb1faf7d46f1d4222969050a61d4193b",
+    "expected": [
+      {
+        "dependency": "@humanfs/types",
+        "origin": "types",
+        "severity": "devDependency",
+        "declaredRange": "^0.15.0"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "Published dist/node-hfs.d.ts refers to @humanfs/types, which is listed only as a devDependency. Independently validated as a Vue workspace discovery candidate."
+  },
+  {
+    "name": "@globalart/ddd",
+    "version": "4.3.0",
+    "url": "https://registry.npmjs.org/@globalart/ddd/-/ddd-4.3.0.tgz",
+    "sha512": "1602f4ea0e8246ecc91f9edd4dfc314e5b1c842a31a1be43b949a568bedb23db9d623171013504a4b56a29771747c7844928780df3003563caf385def3abc5d0",
+    "expected": [
+      {
+        "dependency": "date-fns",
+        "severity": "undeclared",
+        "origin": "runtime"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "Published CommonJS and ESM entrypoints import date-fns, absent from the manifest. Identified from the public nubjs package-extensions dataset and independently tested."
+  },
+  {
+    "name": "eslint-config-next",
+    "version": "16.4.3",
+    "url": "https://registry.npmjs.org/eslint-config-next/-/eslint-config-next-16.4.3.tgz",
+    "sha512": "8fd22a0666ba69ba7cd347eb7545116a2cd83205ce2be8cd1b2aba0ac61c33d031a5226ce43fd380c346780991522959bc0ee0f55d53afbd60360f7f4954ee31",
+    "expected": [
+      {
+        "dependency": "next",
+        "severity": "undeclared",
+        "origin": "runtime"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The exported parser subpath requires next/dist/compiled/babel/eslint-parser but next is absent from the package manifest."
+  },
+  {
+    "name": "@material/base",
+    "version": "14.0.0",
+    "url": "https://registry.npmjs.org/@material/base/-/base-14.0.0.tgz",
+    "sha512": "3aeeef4bb9f51f8635d0c519c9801bb7a1f4b7aedceaeaf1a0281e553eccdfc69095a354c0530e0e9eca4ff9b28d8cf66142df86edcfb5f495dd296d81a73d98",
+    "expected": [],
+    "maxFindings": 0,
+    "maxDiagnosticLines": 0,
+    "evidence": "Clean Sass control: shipped files use relative forwards and the built-in sass:list module, neither of which needs an npm dependency."
+  },
+  {
+    "name": "is-bun-module",
+    "version": "2.0.0",
+    "url": "https://registry.npmjs.org/is-bun-module/-/is-bun-module-2.0.0.tgz",
+    "sha512": "80d0866e79e79c501418a799f4f75bc9e19826a7b0a6673668a1d410c3b99d03d653d94e9afee3726408bfea870fc7d75ba5bba9fb82c17e2b63d2cd4635eb91",
+    "expected": [],
+    "expectedIncomplete": true,
+    "expectedDiagnostics": [
+      "dist/shared.d.ts"
+    ],
+    "maxDiagnosticLines": 1,
+    "evidence": "The published shared.d.ts includes ambient initializers rejected by TypeScript. The diagnostic is asserted without claiming the archive itself is valid."
+  },
+  {
+    "name": "eslint-plugin-compat",
+    "version": "7.0.2",
+    "url": "https://registry.npmjs.org/eslint-plugin-compat/-/eslint-plugin-compat-7.0.2.tgz",
+    "sha512": "80df2117ee0dcccb0751baf89bf4d864ad05b56dc3715e20f2b5e94ec636115e718910fc8ec8a552507d94d4a41865f4bde0c2c4c84a4966d277e7da241c900c",
+    "expected": [
+      {
+        "dependency": "caniuse-lite",
+        "severity": "undeclared",
+        "origin": "runtime"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The published browser-compatibility provider requires caniuse-lite but the manifest does not declare it. Verified by executing an ESLint compatibility rule."
+  },
+  {
+    "name": "v8-compile-cache-lib",
+    "version": "3.0.1",
+    "url": "https://registry.npmjs.org/v8-compile-cache-lib/-/v8-compile-cache-lib-3.0.1.tgz",
+    "sha512": "c1aed88f25067cd667808fefb4ad141c037e9600c2c413c2ca55571a9d33bb9f45cf96a21ad3576aadc3848a2fd3adcca2b07e55fb9f2e1dc9945d8a7532b7c6",
+    "expected": [],
+    "expectedIncomplete": true,
+    "expectedDiagnostics": [
+      "v8-compile-cache.d.ts"
+    ],
+    "maxDiagnosticLines": 1,
+    "evidence": "The published declaration ends with a stray bare identifier rejected in ambient contexts. Repair must preserve the rest of the declaration."
+  },
+  {
+    "name": "faker",
+    "version": "5.5.3",
+    "url": "https://registry.npmjs.org/faker/-/faker-5.5.3.tgz",
+    "sha512": "c0b4efd9adbcc235325a46e75fbbbf0016419149081767c277bdd5e8fda816a106124b437f35b1e14c6b4aab4f470d313d101c8de00e222256a999b7a4fe2ede",
+    "expected": [],
+    "maxFindings": 0,
+    "maxDiagnosticLines": 0,
+    "evidence": "Published locale files include ISO-8859-1 bytes; their valid source must be scanned without a UTF-8 read diagnostic."
+  },
+  {
+    "name": "@picocss/pico",
+    "version": "1.5.10",
+    "url": "https://registry.npmjs.org/@picocss/pico/-/pico-1.5.10.tgz",
+    "sha512": "f8b69f32caf03f15d0324eac23ffff4e64889c2c30666abe2bb4a29322f737fe06861c33c8f0be4d02d412a9ab2f28e5b91fae22914572a8edcb7d11b6be86c5",
+    "expected": [],
+    "maxFindings": 0,
+    "maxDiagnosticLines": 0,
+    "evidence": "Shipped Sass uses interpolated quoted data URLs in its themes; these must parse without invented package references."
+  },
+  {
+    "name": "@sidvind/better-ajv-errors",
+    "version": "0.6.10",
+    "url": "https://registry.npmjs.org/@sidvind/better-ajv-errors/-/better-ajv-errors-0.6.10.tgz",
+    "sha512": "bcfbfc92ce89d4a416d4b3d88319803717079e213a2c5b9e931369728514928b49dacaf13f8a9767ecbdaa9a392c05e19cba0d3f4007f1c9e29e298aebc812e8",
+    "expected": [],
+    "notExpected": [
+      "./types"
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "Published Flow-comment syntax in lib/modern/utils.js includes a relative ./types import and must parse without a diagnostic. Other shipped test-file findings are not labeled as actionable."
+  },
+  {
+    "name": "@vercel/sandbox",
+    "version": "1.8.0",
+    "url": "https://registry.npmjs.org/@vercel/sandbox/-/sandbox-1.8.0.tgz",
+    "sha512": "49b5e483c166a7c8be23d21dc83e0f00056dc4cfca4b850b5787a211f63ff6d69bd4017530fbe6100f3f79bbc29fb41359043bb70c2da493523e551598e069df",
+    "expected": [],
+    "notExpected": [
+      "ms"
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The manifest declares runtime ms, so static phantom-dependency analysis must not report ms. Strict TypeScript can still require an installed @types/ms provider; the verified command test covers that separate defect."
+  },
+  {
+    "name": "@unocss/autocomplete",
+    "version": "66.11.0",
+    "url": "https://registry.npmjs.org/@unocss/autocomplete/-/autocomplete-66.11.0.tgz",
+    "sha512": "fa5c70a16d89f222df0499236f5784cda9a1580b6bb041146a219b74eca5e4840df027a48a051f149f1456526494255a47288ad516c8bd558af920bf901524be",
+    "expected": [
+      {
+        "dependency": "@unocss/core",
+        "severity": "devDependency",
+        "origin": "both",
+        "declaredRange": "66.11.0"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "Published ESM entry imports @unocss/core, which is only a devDependency. A real Nuxt ui-templates build failed under persistent global virtual store and passed after xray generated an optional peer."
+  }
+]

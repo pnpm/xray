@@ -94,13 +94,14 @@ for (const target of TARGETS) {
         os: [target.os],
         cpu: [target.cpu],
         ...(target.libc ? { libc: [target.libc] } : {}),
-        files: [executable],
+        files: [executable, 'THIRD_PARTY_NOTICES'],
       },
       null,
       2
     )}\n`
   )
   fs.copyFileSync(resolve(REPO_ROOT, 'LICENSE'), resolve(packageDir, 'LICENSE'))
+  fs.copyFileSync(resolve(REPO_ROOT, 'THIRD_PARTY_NOTICES'), resolve(packageDir, 'THIRD_PARTY_NOTICES'))
 
   if (fs.existsSync(artifact)) {
     fs.copyFileSync(artifact, resolve(packageDir, executable))
@@ -117,7 +118,7 @@ fs.writeFileSync(wrapperManifestPath, `${JSON.stringify(wrapperManifest, null, 2
 
 // The wrapper publishes from its own directory, so the files npm shows on the
 // package page have to be next to it rather than at the repo root.
-for (const file of ['README.md', 'LICENSE']) {
+for (const file of ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES']) {
   fs.copyFileSync(resolve(REPO_ROOT, file), resolve(WRAPPER_DIR, file))
 }
 

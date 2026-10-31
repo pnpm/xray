@@ -27,7 +27,8 @@
     "bin/",
     "platform.mjs",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_NOTICES"
   ],
   "optionalDependencies": {
     "@pnpm/xray.win32-x64": "0.1.0",

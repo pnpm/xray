@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "frozen": "2026-10-31",
+  "cases": [
+    {
+      "name": "@angular-eslint/bundled-angular-compiler",
+      "version": "22.6.0",
+      "url": "https://registry.npmjs.org/@angular-eslint/bundled-angular-compiler/-/bundled-angular-compiler-22.6.0.tgz",
+      "sha512": "38ea166c51b724eb1d63dfea898d9875724564d560de33dbd3d3931d0bc18abd022c87449ee74a78f56cd09c6528bd58974e626efc28968fbf1307e6a791aabe",
+      "expected": [
+        "@angular/compiler"
+      ],
+      "clean": false
+    },
+    {
+      "name": "@angular-eslint/template-parser",
+      "version": "22.6.0",
+      "url": "https://registry.npmjs.org/@angular-eslint/template-parser/-/template-parser-22.6.0.tgz",
+      "sha512": "426ad6e53f526fcbded9c8041ad9210ee8e9ec43519d792a4fe9c2c4b2b4ad991b3d7113fa2d6cbcbc6e738b73c9526971e628efbd84cccc90b896cdaa21ff70",
+      "expected": [
+        "@typescript-eslint/types"
+      ],
+      "clean": false
+    },
+    {
+      "name": "@firebase/app-check-types",
+      "version": "0.5.5",
+      "url": "https://registry.npmjs.org/@firebase/app-check-types/-/app-check-types-0.5.5.tgz",
+      "sha512": "f8317883316b970185ca4cb7f28e13fd837faf9d65ef4c82b49d874e4c26463f0508cc0f8e6e212c7e1f41b8fa054bf392216a9620648ad16c4697f5fd866458",
+      "expected": [
+        "@firebase/util",
+        "@firebase/app-types",
+        "@firebase/component"
+      ],
+      "clean": false
+    },
+    {
+      "name": "@codemirror/lang-json",
+      "version": "6.0.2",
+      "url": "https://registry.npmjs.org/@codemirror/lang-json/-/lang-json-6.0.2.tgz",
+      "sha512": "c763ad3be02fc041eb130474172c8fb5f0d48a5a06deb9d54d2655d56f14b5e68b2fcfcc6a341df03a6f51bd985730befd3d7c6920efd07f66bbec70d044ada1",
+      "expected": [
+        "@codemirror/lint",
+        "@codemirror/view"
+      ],
+      "clean": false
+    },
+    {
+      "name": "@jimp/jpeg",
+      "version": "0.22.12",
+      "url": "https://registry.npmjs.org/@jimp/jpeg/-/jpeg-0.22.12.tgz",
+      "sha512": "46adba5c2fee4166902b26ffe6592c0930b15e1b58d3534978137e750bf9c8d61e74dd22ee262ef9f5c4a11b1f689f316738e800d1fcb27b3bad53f8184eddfd",
+      "expected": [
+        "@jimp/core"
+      ],
+      "clean": false
+    },
+    {
+      "name": "@jscpd/html-reporter",
+      "version": "4.2.5",
+      "url": "https://registry.npmjs.org/@jscpd/html-reporter/-/html-reporter-4.2.5.tgz",
+      "sha512": "ccc30829bbe2e3774c81e35e1d7947432d68bdff8a26bccd954b9b681bc20156ada8fdb792c5bc7777e6b1ebc8406f6630c4c7d03d713b3f92c549f515110e3e",
+      "expected": [
+        "@jscpd/core",
+        "@jscpd/finder"
+      ],
+      "clean": false
+    },
+    {
+      "name": "clsx",
+      "version": "2.1.1",
+      "url": "https://registry.npmjs.org/clsx/-/clsx-2.1.1.tgz",
+      "sha512": "7989b441606d52b0566561b4777f3a386030d7a67df793e2395a3607b6e35926c779d1a5e5ed1959aabae6438681448d7ac1080e407d2126d383f24af5d84264",
+      "expected": [],
+      "clean": true
+    },
+    {
+      "name": "kleur",
+      "version": "4.1.5",
+      "url": "https://registry.npmjs.org/kleur/-/kleur-4.1.5.tgz",
+      "sha512": "a3e34efbc5ab462404138ffb9f044984dd475a9566266e75d690475313cbb69d015084b3941a653916129937250a726f42adad2aefec825df156991ced95ae41",
+      "expected": [],
+      "clean": true
+    },
+    {
+      "name": "ms",
+      "version": "2.1.3",
+      "url": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+      "sha512": "e85973b9b4cb646dc9d9afcd542025784863ceae68c601f268253dc985ef70bb2fa1568726afece715c8ebf5d73fab73ed1f7100eb479d23bfb57b45dd645394",
+      "expected": [],
+      "clean": true
+    },
+    {
+      "name": "is-even",
+      "version": "1.0.0",
+      "url": "https://registry.npmjs.org/is-even/-/is-even-1.0.0.tgz",
+      "sha512": "2c4867900749aa27380dbaa7e7c034cb9d885e81d696cb9ea9090a7cc7dd1272181bc035b26fc61e274a912eb2bd794ca11ae4337e1cb079d742d3aa71bf89ce",
+      "expected": [],
+      "clean": true
+    },
+    {
+      "name": "@jridgewell/sourcemap-codec",
+      "version": "1.5.5",
+      "url": "https://registry.npmjs.org/@jridgewell/sourcemap-codec/-/sourcemap-codec-1.5.5.tgz",
+      "sha512": "71843ddf5d20aeac6e7966e5f96b885086a251a0dc8fb58eab97d58449633558117ce52163d7f2db34ef7e8a96b2779b87c4a5ef45527056c80af2672ca0743a",
+      "expected": [],
+      "clean": true
+    },
+    {
+      "name": "@tsconfig/node22",
+      "version": "22.0.6",
+      "url": "https://registry.npmjs.org/@tsconfig/node22/-/node22-22.0.6.tgz",
+      "sha512": "ff9b616af1c09d60d9c07d87e9e127fd3f29044061b6e29a58632c96c8fcda425fbf34203a010c2bb5f882805b2148e056d0333d3b4cf4c97ae0b034bb13ba23",
+      "expected": [],
+      "clean": true
+    }
+  ]
+}

@@ -1,7 +1,7 @@
-#![cfg(unix)]
-
+#[cfg(unix)]
+use crate::fixtures::global_virtual_store;
 use crate::{
-    fixtures::{global_virtual_store, manifest, write},
+    fixtures::{manifest, write},
     manifest::Manifest,
     reachable::reachable_files,
 };
@@ -15,6 +15,7 @@ fn names(package_dir: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
+#[cfg(unix)]
 #[test]
 fn follows_relative_imports_out_of_the_entry_points() {
     let root = global_virtual_store();
@@ -22,6 +23,110 @@ fn follows_relative_imports_out_of_the_entry_points() {
     let mut found = names(&app);
     found.sort();
     assert_eq!(found, ["index.d.ts", "index.js", "lib/helper.js"]);
+}
+
+#[test]
+fn javascript_entries_and_their_children_include_declaration_companions() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", ""));
+    write(&dir.join("index.js"), "require('./lib/feature');");
+    write(&dir.join("index.d.ts"), "export * from './lib/feature';");
+    write(&dir.join("lib/feature.js"), "module.exports = 1;");
+    write(&dir.join("lib/feature.d.ts"), "import type { X } from 'missing';");
+    assert_eq!(names(&dir), ["index.d.ts", "index.js", "lib/feature.d.ts", "lib/feature.js"]);
+    let report =
+        crate::analyze::analyze_for_repair(&dir, crate::analyze::Scope::Declared).unwrap().unwrap();
+    assert_eq!(report.findings[0].dependency, "missing");
+}
+
+#[test]
+fn triple_slash_paths_follow_declaration_files_and_stop_at_package_boundary() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest("pkg", r#","exports":"./index.js","types":"./index.d.ts""#),
+    );
+    write(&dir.join("index.js"), "module.exports = 1;");
+    write(&dir.join("index.d.ts"), "/// <reference path=\"types/a.d.ts\" />\n/// <reference path=\"./types/b.d.ts\" />\n/// <reference path=\"../outside.d.ts\" />\nexport {};\n");
+    write(
+        &dir.join("types/a.d.ts"),
+        "/// <reference path=\"../index.d.ts\" />\nimport 'missing-a';\n",
+    );
+    write(&dir.join("types/b.d.ts"), "import 'missing-b';\n");
+    write(&root.path().join("outside.d.ts"), "import 'not-ours';\n");
+    assert_eq!(names(&dir), ["index.d.ts", "index.js", "types/a.d.ts", "types/b.d.ts"]);
+    let report =
+        crate::analyze::analyze_for_repair(&dir, crate::analyze::Scope::Declared).unwrap().unwrap();
+    assert_eq!(
+        report.findings.iter().map(|finding| finding.dependency.as_str()).collect::<Vec<_>>(),
+        ["missing-a", "missing-b"],
+    );
+    assert_eq!(report.findings[0].evidence.first().unwrap().file, "types/a.d.ts");
+}
+
+#[test]
+fn typescript_source_entry_follows_reference_directives() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","exports":"./index.ts""#));
+    write(&dir.join("index.ts"), "/// <reference types=\"missing-types\" />\n/// <reference path=\"hidden.ts\" />\nexport const value = 1;\n");
+    write(&dir.join("hidden.ts"), "import 'runtime-missing';\n");
+    let report =
+        crate::analyze::analyze_for_repair(&dir, crate::analyze::Scope::Declared).unwrap().unwrap();
+    assert_eq!(report.findings.len(), 2);
+    assert_eq!(report.findings[0].dependency, "@types/missing-types");
+    assert_eq!(report.findings[0].origin, crate::scan::Origin::Types);
+    assert_eq!(report.findings[1].dependency, "runtime-missing");
+    assert_eq!(report.findings[1].origin, crate::scan::Origin::Runtime);
+}
+
+#[test]
+fn esm_relative_urls_resolve_queries_fragments_and_percent_encoded_filenames() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","exports":"./index.mjs""#));
+    write(
+        &dir.join("index.mjs"),
+        "import './file%20name.mjs?feature#hash';\nimport './plain.mjs#fragment';\n",
+    );
+    write(&dir.join("file name.mjs"), "import 'hidden-missing';\nimport './index.mjs?cycle';\n");
+    write(&dir.join("plain.mjs"), "export const value = 1;\n");
+    let report =
+        crate::analyze::analyze_for_repair(&dir, crate::analyze::Scope::Declared).unwrap().unwrap();
+    assert_eq!(report.findings[0].dependency, "hidden-missing");
+    assert_eq!(report.findings[0].evidence.first().unwrap().file, "file name.mjs");
+    let output = std::process::Command::new("node").arg(dir.join("index.mjs")).output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("hidden-missing"));
+}
+
+#[test]
+fn cjs_literals_are_not_url_decoded_and_esm_cannot_escape_package() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","exports":"./index.cjs""#));
+    write(&dir.join("index.cjs"), "require('./hidden.js?query'); import('../outside.mjs?query'); import('./nested%2Fchild.mjs');");
+    write(&dir.join("hidden.js"), "require('cjs-not-reached');");
+    write(&dir.join("nested/child.mjs"), "import 'encoded-separator-not-reached';");
+    write(&root.path().join("outside.mjs"), "import 'outside-not-reached';");
+    assert!(crate::analyze::analyze_for_repair(&dir, crate::analyze::Scope::Declared)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn types_versions_entries_do_not_hide_the_default_javascript_entry() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest("pkg", r#","typesVersions":{"*":{"feature":["types/feature.d.ts"]}}"#),
+    );
+    write(&dir.join("index.js"), "require('runtime');");
+    write(&dir.join("types/feature.d.ts"), "import 'types-dependency';");
+    assert_eq!(names(&dir), ["index.js", "types/feature.d.ts"]);
 }
 
 #[test]
@@ -57,6 +162,22 @@ fn a_js_specifier_resolves_to_the_typescript_source_beside_it() {
 }
 
 #[test]
+fn mjs_and_cjs_specifiers_resolve_to_declarations_of_the_same_format() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","exports":{"types":"./index.d.mts"}"#));
+    write(&dir.join("index.d.mts"), "export * from './types.mjs';\nexport * from './cjs.cjs';\n");
+    write(&dir.join("types.js"), "module.exports = 1;\n");
+    write(&dir.join("types.d.ts"), "export {};\n");
+    write(&dir.join("types.d.mts"), "export {};\n");
+    write(&dir.join("cjs.js"), "module.exports = 1;\n");
+    write(&dir.join("cjs.d.cts"), "export {};\n");
+    let mut found = names(&dir);
+    found.sort();
+    assert_eq!(found, ["cjs.d.cts", "index.d.mts", "types.d.mts"]);
+}
+
+#[test]
 fn every_string_under_exports_is_an_entry() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("pkg");
@@ -69,6 +190,70 @@ fn every_string_under_exports_is_an_entry() {
     let mut found = names(&dir);
     found.sort();
     assert_eq!(found, ["cjs.cjs", "esm.mjs"]);
+}
+
+#[test]
+fn export_patterns_include_nested_matching_files() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","exports":{"./*":"./dist/*.js"}"#));
+    write(&dir.join("dist/first.js"), "require('missing-one');");
+    write(&dir.join("dist/nested/second.js"), "require('missing-two');");
+    write(&dir.join("dist/ignored.ts"), "import 'not-exported';");
+    write(&dir.join("node_modules/bundled/dist/third.js"), "require('not-ours');");
+    assert_eq!(names(&dir), ["dist/first.js", "dist/nested/second.js"]);
+    let report = crate::analyze::test_helpers::analyze(&dir, crate::analyze::Scope::Declared)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        report.findings.iter().map(|f| f.dependency.as_str()).collect::<Vec<_>>(),
+        ["missing-one", "missing-two"],
+    );
+}
+
+#[test]
+fn export_targets_substitute_every_star() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","exports":{"./*":"./dist/*/*.js"}"#));
+    write(&dir.join("dist/button/button.js"), "require('missing-one');");
+    write(&dir.join("dist/a/b/a/b.js"), "require('missing-two');");
+    write(&dir.join("dist/button/other.js"), "require('not-exported');");
+    assert_eq!(names(&dir), ["dist/a/b/a/b.js", "dist/button/button.js"]);
+}
+
+#[test]
+fn specific_export_keys_override_wildcards_including_null_exclusions() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest(
+            "pkg",
+            r#","exports":{"./*":"./dist/*.js","./private/*":null,"./secret":null,"./special":"./other.js","./private/allowed":"./allowed.js"}"#,
+        ),
+    );
+    write(&dir.join("dist/public.js"), "require('public');");
+    write(&dir.join("dist/private/hidden.js"), "require('hidden');");
+    write(&dir.join("dist/private/allowed.js"), "require('wrong-allowed');");
+    write(&dir.join("dist/secret.js"), "require('secret');");
+    write(&dir.join("dist/special.js"), "require('wrong-special');");
+    write(&dir.join("other.js"), "require('special');");
+    write(&dir.join("allowed.js"), "require('allowed');");
+    assert_eq!(names(&dir), ["allowed.js", "dist/public.js", "other.js"]);
+}
+
+#[test]
+fn excluded_file_is_still_reached_via_a_relative_import() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest("pkg", r#","exports":{"./*":"./dist/*.js","./private/*":null}"#),
+    );
+    write(&dir.join("dist/public.js"), "require('./private/helper.js');");
+    write(&dir.join("dist/private/helper.js"), "require('dependency');");
+    assert_eq!(names(&dir), ["dist/private/helper.js", "dist/public.js"]);
 }
 
 /// Two files importing each other is ordinary, and it used to walk forever:

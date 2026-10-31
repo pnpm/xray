@@ -7,6 +7,11 @@ on:
         description: npm dist-tag to publish under
         default: latest
         required: false
+      validate_only:
+        description: Build and test packages without publishing
+        type: boolean
+        default: false
+        required: true
 
 permissions:
   contents: read
@@ -48,6 +53,12 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
+    - name: Install native Node for package validation
+      uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
+      with:
+        version: 12.16.1
+        runtime: node@24
+        install: false
     # The toolchain itself comes from rust-toolchain.toml, which rustup honours
     # on the first cargo invocation.
     - name: Add the Rust target
@@ -58,8 +69,23 @@ jobs:
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         key: ${{ matrix.target }}
-    - name: Build
+    # Pin both the linker and its binary archive. A versioned target stops the
+    # runner's newer glibc from becoming the minimum supported glibc.
+    - name: Install cargo-zigbuild
+      if: endsWith(matrix.target, '-linux-gnu')
+      run: cargo install --locked cargo-zigbuild --version '=0.24.0'
+    - name: Install Zig
+      if: endsWith(matrix.target, '-linux-gnu')
+      run: scripts/install-release-zig.sh
+    - name: Build GNU Linux for glibc 2.28
+      if: endsWith(matrix.target, '-linux-gnu')
+      run: cargo zigbuild --locked --release --target ${{ matrix.target }}.2.28
+    - name: Build other targets
+      if: ${{ !endsWith(matrix.target, '-linux-gnu') }}
       run: cargo build --locked --release --target ${{ matrix.target }}
+    - name: Verify GNU Linux ABI and smoke test
+      if: endsWith(matrix.target, '-linux-gnu')
+      run: scripts/check-gnu-abi.sh target/${{ matrix.target }}/release/xray
     # The artifact is named for the package it will end up in, so the publish
     # job can lay the packages out without knowing about Rust triples.
     - name: Stage the executable under its package target name
@@ -70,15 +96,40 @@ jobs:
         else
           cp "target/${{ matrix.target }}/release/xray" "xray.${{ matrix.packageTarget }}"
         fi
+    - name: Test packaged launcher offline
+      if: ${{ !endsWith(matrix.target, '-musl') }}
+      shell: bash
+      run: |
+        binary="xray.${{ matrix.packageTarget }}"
+        if [[ "${{ matrix.packageTarget }}" == win32-* ]]; then binary="$binary.exe"; fi
+        node scripts/package-smoke.mjs "${{ matrix.packageTarget }}" "$binary"
+    - name: Test musl packaged launcher offline
+      if: endsWith(matrix.target, '-musl')
+      run: |
+        docker run --rm --network=none -v "$PWD:/work:ro" -w /work \
+          node@sha256:8a32c8cf649a49915a66e81e7a609223c708d0adabf288ee3f4077d765542f85 \
+          node scripts/package-smoke.mjs '${{ matrix.packageTarget }}' 'xray.${{ matrix.packageTarget }}'
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: xray.${{ matrix.packageTarget }}
         path: xray.${{ matrix.packageTarget }}*
         if-no-files-found: error
 
+  validation:
+    name: Validate all release targets
+    needs: build
+    if: ${{ always() && inputs.validate_only == true }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Require all builds and package smoke tests
+      env:
+        BUILD_RESULT: ${{ needs.build.result }}
+      run: test "$BUILD_RESULT" = success
+
   publish:
     name: Publish to npm
     needs: build
+    if: ${{ inputs.validate_only == false }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -109,9 +160,15 @@ jobs:
     - name: Publish the platform packages
       run: |
         for dir in npm/xray.*; do
-          pn publish "$dir" --access public --provenance --no-git-checks --tag "${{ inputs.tag }}"
+          pn publish "$dir" --access public --provenance --no-git-checks --tag "$TAG"
         done
+      env:
+        # Pass the input through the environment rather than splicing it into
+        # the script, so its value cannot inject shell.
+        TAG: ${{ inputs.tag }}
     # The wrapper depends on the platform packages, so publishing it first would
     # leave a version on the registry that resolves to no binary at all.
     - name: Publish the wrapper
-      run: pn publish npm/xray --access public --provenance --no-git-checks --tag "${{ inputs.tag }}"
+      run: pn publish npm/xray --access public --provenance --no-git-checks --tag "$TAG"
+      env:
+        TAG: ${{ inputs.tag }}

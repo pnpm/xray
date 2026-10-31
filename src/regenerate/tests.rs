@@ -1,0 +1,122 @@
+use super::{verified_patches, BridgeFile, BridgeResult};
+use std::collections::BTreeMap;
+
+#[test]
+fn node_path_helpers_normalize_windows_drive_and_unc_spellings() {
+    let helper = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/regenerate-paths.cjs");
+    let script = r"const assert = require('node:assert/strict');
+const paths = require(process.argv[1]);
+assert.equal(paths.normalize('\\\\?\\C:\\Users\\Test', true), 'C:\\Users\\Test');
+assert.equal(paths.normalize('\\\\?\\UNC\\server\\share\\file', true), '\\\\server\\share\\file');
+assert.equal(paths.key('C:/Users/Test', true), paths.key('\\\\?\\c:\\users\\test', true));
+assert.notEqual(paths.key('/tmp/Example', false), paths.key('/tmp/example', false));";
+    let output =
+        std::process::Command::new("node").arg("-e").arg(script).arg(helper).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+fn item(root: &std::path::Path, name: &str, original: &str, replacement: &str) -> BridgeFile {
+    let file = root.join(name);
+    std::fs::write(&file, original).unwrap();
+    BridgeFile {
+        root: root.to_path_buf(),
+        file,
+        original: original.into(),
+        replacement: replacement.into(),
+    }
+}
+fn result(files: Vec<BridgeFile>) -> BridgeResult {
+    BridgeResult { compiler: "5.9.3".into(), files, messages: Vec::new() }
+}
+
+#[test]
+fn validates_declaration_paths_changes_and_uniqueness() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let roots = BTreeMap::from([(root.clone(), "fixture@1.0.0".into())]);
+    let valid = item(&root, "index.d.mts", "invalid", "valid");
+    let patches = verified_patches(result(vec![valid]), &roots).unwrap();
+    assert_eq!(patches[0].files[0].path, std::path::Path::new("index.d.mts"));
+    assert!(verified_patches(result(vec![item(&root, "index.js", "old", "new")]), &roots).is_err());
+    assert!(
+        verified_patches(result(vec![item(&root, "same.d.ts", "same", "same")]), &roots).is_err(),
+    );
+    let first = item(&root, "dup.d.ts", "old", "new");
+    let second = item(&root, "dup.d.ts", "old", "new");
+    assert!(verified_patches(result(vec![first, second]), &roots).is_err());
+}
+
+#[test]
+fn merges_identical_edits_to_peer_variant_copies_of_one_package() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_root = temp.path().join("a");
+    let second_root = temp.path().join("b");
+    std::fs::create_dir_all(&first_root).unwrap();
+    std::fs::create_dir_all(&second_root).unwrap();
+    let first_root = first_root.canonicalize().unwrap();
+    let second_root = second_root.canonicalize().unwrap();
+    let roots = BTreeMap::from([
+        (first_root.clone(), "fixture@1.0.0".into()),
+        (second_root.clone(), "fixture@1.0.0".into()),
+    ]);
+    let files = vec![
+        item(&first_root, "index.d.ts", "old", "new"),
+        item(&second_root, "index.d.ts", "old", "new"),
+    ];
+    let patches = verified_patches(result(files), &roots).unwrap();
+    assert_eq!(patches.len(), 1);
+    assert_eq!(patches[0].files.len(), 1);
+    let conflicting = vec![
+        item(&first_root, "index.d.ts", "old", "new"),
+        item(&second_root, "index.d.ts", "old", "other"),
+    ];
+    assert!(verified_patches(result(conflicting), &roots).is_err());
+}
+
+#[test]
+fn refuses_nested_file_attributed_to_outer_package() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let child = root.join("node_modules/child");
+    std::fs::create_dir_all(&child).unwrap();
+    let child = child.canonicalize().unwrap();
+    let roots = BTreeMap::from([(root.clone(), "outer@1".into()), (child, "inner@1".into())]);
+    let file = root.join("node_modules/child/index.d.ts");
+    std::fs::write(&file, "old").unwrap();
+    let wrong = BridgeFile { root, file, original: "old".into(), replacement: "new".into() };
+    assert!(verified_patches(result(vec![wrong]), &roots).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn accepts_node_nonverbatim_spelling_for_a_canonical_windows_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let roots = BTreeMap::from([(root.clone(), "fixture@1".into())]);
+    let valid = item(&root, "index.d.ts", "old", "new");
+    let strip = |path: &std::path::Path| {
+        std::path::PathBuf::from(
+            path.to_str().unwrap().strip_prefix(r"\\?\").unwrap_or(path.to_str().unwrap()),
+        )
+    };
+    let node_file = BridgeFile { root: strip(&valid.root), file: strip(&valid.file), ..valid };
+    assert!(verified_patches(result(vec![node_file]), &roots).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_a_declaration_file_reached_through_a_symlink() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let roots = BTreeMap::from([(root.clone(), "fixture@1".into())]);
+    std::fs::write(root.join("actual.d.ts"), "old").unwrap();
+    symlink("actual.d.ts", root.join("index.d.ts")).unwrap();
+    let file = BridgeFile {
+        root: root.clone(),
+        file: root.join("index.d.ts"),
+        original: "old".into(),
+        replacement: "new".into(),
+    };
+    assert!(verified_patches(result(vec![file]), &roots).is_err());
+}

@@ -2,13 +2,13 @@
 mod tests;
 
 use crate::{
-    classify::missing_package,
+    classify::{missing_package, types_package},
     manifest::Manifest,
-    reachable::reachable_files,
-    report::{Finding, PackageReport, Severity},
+    reachable::{browser_replacements, reachable_files, reachable_files_for_repair, resolve_style},
+    report::{Diagnostic, DiagnosticKind, Evidence, Finding, PackageReport, Severity},
     scan::{self, Origin},
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     path::{Path, PathBuf},
@@ -20,16 +20,40 @@ use walkdir::WalkDir;
 pub enum Scope {
     /// Follow the package's own encapsulation: walk from the entry points when
     /// an `exports` map says which files are reachable, and read everything
-    /// otherwise.
+    /// otherwise — every file of such a package is deep-importable.
+    ///
+    /// A repair ([`analyze_for_repair`]) is narrower on purpose: it always walks
+    /// from the entry points (plus every stylesheet, when there is no `exports`
+    /// map), so a test or template that merely ships in the tarball cannot add
+    /// a dependency to the consumer's lockfile. `--fix --all-files` widens it
+    /// to [`Scope::EveryFile`].
     Declared,
     /// Everything in the tarball, including tests, templates and examples whose
     /// dependencies belong to whoever runs them.
     EveryFile,
 }
 
-/// What one installed package reaches for but never declared, or `None` when it
-/// declared everything its shipped files name.
-pub fn analyze(package_dir: &Path, scope: Scope) -> Result<Option<PackageReport>> {
+#[cfg(test)]
+pub mod test_helpers;
+
+pub struct AnalysisOutcome {
+    pub report: Option<PackageReport>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Analyze without printing diagnostics, including failures in otherwise clean packages.
+pub fn analyze_with_diagnostics(package_dir: &Path, scope: Scope) -> Result<AnalysisOutcome> {
+    analyze_inner(package_dir, scope, false)
+}
+
+/// Analyze a package for an automatic repair, rejecting incomplete scans. With
+/// [`Scope::Declared`] only the entry-point graph is read, whether or not the
+/// package has an `exports` map.
+pub fn analyze_for_repair(package_dir: &Path, scope: Scope) -> Result<Option<PackageReport>> {
+    Ok(analyze_inner(package_dir, scope, true)?.report)
+}
+
+fn analyze_inner(package_dir: &Path, scope: Scope, strict: bool) -> Result<AnalysisOutcome> {
     let manifest = Manifest::read(package_dir)?;
     let declared: HashSet<&str> = manifest.reachable().collect();
 
@@ -39,40 +63,146 @@ pub fn analyze(package_dir: &Path, scope: Scope) -> Result<Option<PackageReport>
     // or not.
     let encapsulated = manifest.is_encapsulated();
     let files: Vec<PathBuf> = match scope {
+        Scope::Declared if strict => {
+            reachable_files_for_repair(package_dir, &manifest)?.into_iter().collect()
+        }
         Scope::Declared if encapsulated => {
             reachable_files(package_dir, &manifest).into_iter().collect()
         }
         _ => scannable_files(package_dir).collect(),
     };
 
-    let mut referenced: BTreeSet<(scan::Requirement, Origin)> = BTreeSet::new();
-    let mut unparsed = Vec::new();
+    let mut missing: BTreeMap<String, (Origin, BTreeSet<Evidence>)> = BTreeMap::new();
+    let canonical_root = package_dir.canonicalize()?;
+    let mut diagnostics = Vec::new();
     for file in files {
-        let Ok(source) = std::fs::read_to_string(&file) else {
-            continue;
+        let canonical_file = file.canonicalize()?;
+        let relative = canonical_file.strip_prefix(&canonical_root).unwrap_or(&canonical_file);
+        let filename = relative.to_string_lossy().replace('\\', "/");
+        let source = match scan::read_source(&file) {
+            Ok(source) => source,
+            Err(error) if strict => {
+                return Err(error).with_context(|| format!("reading source {}", file.display()))
+            }
+            Err(error) => {
+                diagnostics.push(Diagnostic {
+                    package: manifest.id(),
+                    file: filename,
+                    message: error.to_string(),
+                    kind: DiagnosticKind::ReadError,
+                });
+                continue;
+            }
         };
-        match scan::specifiers(&source, &file) {
-            Ok(found) => referenced.extend(found),
-            Err(reason) => unparsed.push((file, reason)),
+        match scan::references(&source, &file) {
+            Ok(found) => {
+                let positions =
+                    reference_positions(&source, found.iter().map(|(_, _, offset)| *offset));
+                for (requirement, origin, offset) in found {
+                    let specifier = match &requirement {
+                        scan::Requirement::Module(specifier)
+                        | scan::Requirement::EsmRelative(specifier)
+                        | scan::Requirement::TypesReference(specifier)
+                        | scan::Requirement::PathReference(specifier)
+                        | scan::Requirement::Style(specifier, _) => specifier.as_str(),
+                    };
+                    if let scan::Requirement::Style(_, kind) = &requirement {
+                        if resolve_style(file.parent().unwrap_or(package_dir), specifier, *kind)
+                            .iter()
+                            .any(|target| target.starts_with(&canonical_root))
+                        {
+                            continue;
+                        }
+                    }
+                    let (line, column) = positions[&offset];
+                    let evidence = Evidence {
+                        file: filename.clone(),
+                        line,
+                        column,
+                        specifier: specifier.to_string(),
+                        origin,
+                    };
+                    let mut targets = import_targets(&manifest, &requirement, specifier);
+                    add_browser_targets(
+                        &mut targets,
+                        &manifest,
+                        &canonical_root,
+                        file.parent().unwrap_or(package_dir),
+                        origin,
+                    );
+                    for target in &targets {
+                        if let Some(mut name) = missing_package(target, origin, &declared) {
+                            if origin == Origin::Types
+                                && !manifest.dev_dependencies.contains_key(&name)
+                            {
+                                let type_name = types_package(&name);
+                                if manifest.dev_dependencies.contains_key(&type_name) {
+                                    name = type_name;
+                                }
+                            }
+                            let (seen_origin, locations) =
+                                missing.entry(name).or_insert_with(|| (origin, BTreeSet::new()));
+                            *seen_origin = seen_origin.merged(origin);
+                            locations.insert(evidence.clone());
+                        }
+                    }
+                }
+            }
+            Err(reason) if strict => anyhow::bail!("could not parse {}: {reason}", file.display()),
+            Err(reason) => diagnostics.push(Diagnostic {
+                package: manifest.id(),
+                file: filename,
+                message: reason,
+                kind: DiagnosticKind::ParseError,
+            }),
         }
     }
-    for (file, reason) in &unparsed {
-        eprintln!("warning: could not parse {}: {reason}", file.display());
-    }
 
-    // Classified per reference rather than per name: the same package can be
-    // satisfied in a type position by `@types/` and still be missing at run
-    // time, and it is the run-time reference that has to win.
-    let mut missing: BTreeMap<String, Origin> = BTreeMap::new();
-    for (requirement, origin) in &referenced {
-        if let Some(name) = missing_package(requirement, *origin, &declared) {
-            missing.entry(name).and_modify(|seen| *seen = seen.merged(*origin)).or_insert(*origin);
-        }
-    }
+    let report = build_report(&manifest, missing);
+    Ok(AnalysisOutcome { report, diagnostics })
+}
 
+fn import_targets(
+    manifest: &Manifest,
+    requirement: &scan::Requirement,
+    specifier: &str,
+) -> Vec<scan::Requirement> {
+    if specifier.starts_with('#') {
+        manifest.import_targets(specifier).into_iter().map(scan::Requirement::Module).collect()
+    } else {
+        vec![requirement.clone()]
+    }
+}
+
+fn add_browser_targets(
+    targets: &mut Vec<scan::Requirement>,
+    manifest: &Manifest,
+    root: &Path,
+    parent: &Path,
+    origin: Origin,
+) {
+    if origin != Origin::Runtime {
+        return;
+    }
+    let replacements: Vec<scan::Requirement> = targets
+        .iter()
+        .filter_map(|target| match target {
+            scan::Requirement::Module(specifier) => Some(specifier),
+            _ => None,
+        })
+        .flat_map(|specifier| browser_replacements(manifest, root, parent, specifier))
+        .map(scan::Requirement::Module)
+        .collect();
+    targets.extend(replacements);
+}
+
+fn build_report(
+    manifest: &Manifest,
+    missing: BTreeMap<String, (Origin, BTreeSet<Evidence>)>,
+) -> Option<PackageReport> {
     let findings: Vec<Finding> = missing
         .into_iter()
-        .map(|(name, origin)| Finding {
+        .map(|(name, (origin, evidence))| Finding {
             declared_range: manifest.dev_dependencies.get(&name).cloned(),
             severity: if manifest.dev_dependencies.contains_key(&name) {
                 Severity::DevDependency
@@ -81,13 +211,38 @@ pub fn analyze(package_dir: &Path, scope: Scope) -> Result<Option<PackageReport>
             },
             dependency: name,
             origin,
+            evidence,
         })
         .collect();
 
-    if findings.is_empty() {
-        return Ok(None);
+    (!findings.is_empty()).then(|| PackageReport { package: manifest.id(), findings })
+}
+
+/// Walk the source once, including for long minified lines with many references.
+fn reference_positions(
+    source: &str,
+    offsets: impl Iterator<Item = u32>,
+) -> BTreeMap<u32, (usize, usize)> {
+    let offsets: BTreeSet<_> = offsets.collect();
+    let mut chars = source.chars();
+    let (mut byte, mut line, mut column) = (0, 1, 1);
+    let mut positions = BTreeMap::new();
+    for offset in offsets {
+        while byte < offset as usize {
+            let Some(character) = chars.next() else {
+                break;
+            };
+            byte += character.len_utf8();
+            if character == '\n' {
+                line += 1;
+                column = 1;
+            } else {
+                column += 1;
+            }
+        }
+        positions.insert(offset, (line, column));
     }
-    Ok(Some(PackageReport { package: manifest.id(), findings }))
+    positions
 }
 
 /// The files a package ships. Anything under a nested `node_modules` belongs to

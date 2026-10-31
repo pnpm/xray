@@ -1,0 +1,2 @@
+[files]
+extend-exclude = ["vendor/flow-parser/flow_parser.js"]
