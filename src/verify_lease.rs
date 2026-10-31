@@ -69,7 +69,7 @@ pub fn sync_directory(directory: &Path) -> Result<()> {
 /// keyed by the canonical workspace root and is never removed, so two runs
 /// always contend for the same file.
 pub struct WorkspaceLock {
-    _file: File,
+    file: File,
 }
 
 impl WorkspaceLock {
@@ -97,7 +97,16 @@ impl WorkspaceLock {
                 root.display(),
             )
         })?;
-        Ok(Self { _file: file })
+        Ok(Self { file })
+    }
+}
+
+// A child forked concurrently can briefly inherit the open file description
+// before close-on-exec takes effect. Unlock explicitly so dropping this guard
+// does not leave the lock held until that child reaches exec.
+impl Drop for WorkspaceLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
     }
 }
 
@@ -144,8 +153,13 @@ impl Lease {
             bail!("recovery journal lease was replaced; leaving it untouched");
         }
         std::fs::remove_file(&self.path).context("removing recovery journal lease")?;
-        drop(self.file);
         Ok(())
+    }
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
     }
 }
 
