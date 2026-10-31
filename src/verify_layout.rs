@@ -15,8 +15,11 @@ struct Signature {
     store_dir: PathBuf,
     virtual_store_dir: PathBuf,
     global_virtual_store: bool,
-    included: Option<(bool, bool, bool)>,
+    included: Option<Included>,
 }
+
+/// The dependency groups pnpm installed: production, dev, and optional.
+type Included = (bool, bool, bool);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Layout {
@@ -53,7 +56,32 @@ impl Layout {
                 }
             }
         }
+        self.included()?;
         Ok(())
+    }
+
+    /// The single dependency group selection shared by every installed
+    /// importer. Installs run from the workspace root, so a mixed selection
+    /// could not be reproduced by a reinstall.
+    fn included(&self) -> Result<Option<Included>> {
+        let mut groups = self.modules.values().flatten().map(|signature| signature.included);
+        let first = groups.next().flatten();
+        if groups.any(|included| included != first) {
+            bail!("cannot verify repair: workspace importers were installed with different dependency groups; reinstall the workspace with one pnpm install before using --verify");
+        }
+        if let Some((production, dev, _)) = first {
+            if !production && !dev {
+                bail!("cannot verify repair: the installed layout excludes both production and dev dependencies");
+            }
+        }
+        Ok(first)
+    }
+
+    /// Arguments that make every `pnpm install` reproduce the original
+    /// dependency groups (for example after a `--prod` install), so a
+    /// reinstall cannot add or drop dev or optional dependencies.
+    pub fn install_args(&self) -> Result<Vec<&'static str>> {
+        Ok(install_args_for(self.included()?))
     }
 
     pub fn capture(workspace_root: &Path) -> Result<Self> {
@@ -62,7 +90,9 @@ impl Layout {
         if !modules.values().any(Option::is_some) {
             bail!("cannot verify repair: pnpm layout metadata is missing at {}", root.display());
         }
-        Ok(Self { root, modules })
+        let layout = Self { root, modules };
+        layout.included()?;
+        Ok(layout)
     }
 
     /// Reject a change in layout, including a newly added or removed importer.
@@ -76,6 +106,9 @@ impl Layout {
     /// Refuse before executing user commands if pnpm's current configuration
     /// would reinstall into a different resolution layout.
     pub fn preflight(&self) -> Result<()> {
+        let install_args = self.install_args()?;
+        let node_env_production =
+            std::env::var_os("NODE_ENV").is_some_and(|value| value == "production");
         for (project, signature) in &self.modules {
             let Some(signature) = signature else { continue };
             let mut version_command = crate::process::command(std::ffi::OsStr::new("pnpm"));
@@ -121,9 +154,53 @@ impl Layout {
             if !matches_configuration(signature, &config, &store, project, major)? {
                 bail!("installed pnpm layout differs from effective configuration at {}; persist the original hoist and virtual store settings and reinstall before using --verify", project.display());
             }
+            if signature.included.is_some_and(|included| {
+                included != effective_included(&config, &install_args, node_env_production)
+            }) {
+                bail!("installed dependency groups at {} differ from what pnpm install would include; persist the original production, dev, and optional settings and reinstall before using --verify", project.display());
+            }
         }
         Ok(())
     }
+}
+
+fn install_args_for(included: Option<Included>) -> Vec<&'static str> {
+    let mut args = Vec::new();
+    if let Some((production, dev, optional)) = included {
+        match (production, dev) {
+            (true, false) => args.push("--prod"),
+            (false, true) => args.push("--dev"),
+            _ => {}
+        }
+        if !optional {
+            args.push("--no-optional");
+        }
+    }
+    args
+}
+
+/// Predict the dependency groups pnpm includes for an install with these
+/// arguments. Explicit `--prod` or `--dev` override configuration; otherwise
+/// `production` (defaulting to `NODE_ENV=production`) or `dev` restrict it.
+fn effective_included(
+    config: &serde_json::Value,
+    args: &[&str],
+    node_env_production: bool,
+) -> Included {
+    let flag = |key: &str| config.get(key).and_then(serde_json::Value::as_bool);
+    let (production, dev) = if args.contains(&"--prod") {
+        (true, false)
+    } else if args.contains(&"--dev") {
+        (false, true)
+    } else if flag("production").unwrap_or(node_env_production) {
+        (true, false)
+    } else if flag("dev") == Some(true) {
+        (false, true)
+    } else {
+        (true, true)
+    };
+    let optional = !args.contains(&"--no-optional") && flag("optional") != Some(false);
+    (production, dev, optional)
 }
 
 fn matches_configuration(

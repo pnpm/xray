@@ -284,7 +284,7 @@ impl Session<'_> {
                 .cloned(),
         );
         self.checkpoint(&changed)?;
-        let installed = install(self.options.workspace, frozen, self.cancelled)?;
+        let installed = install(self.options.workspace, &self.layout, frozen, self.cancelled)?;
         self.checkpoint(&self.snapshot.lockfiles())?;
         self.snapshot.verify_unchanged()?;
         self.layout.verify_unchanged()?;
@@ -299,7 +299,7 @@ impl Session<'_> {
         if self.dirty {
             eprintln!("Reinstalling the original locked dependency graph.");
             self.layout.preflight()?;
-            let restored = install(self.options.workspace, true, self.cancelled)?;
+            let restored = install(self.options.workspace, &self.layout, true, self.cancelled)?;
             self.checkpoint(&self.snapshot.lockfiles())?;
             self.snapshot.verify_unchanged()?;
             self.layout.verify_unchanged()?;
@@ -368,11 +368,20 @@ impl Session<'_> {
     }
 }
 
-fn install(workspace: &Path, frozen: bool, cancelled: &AtomicBool) -> Result<bool> {
+/// Every install reproduces the original dependency groups; otherwise a
+/// workspace installed with `--prod` would gain dev dependencies and fail the
+/// layout check on every attempt, including rollback and recovery.
+fn install(
+    workspace: &Path,
+    layout: &Layout,
+    frozen: bool,
+    cancelled: &AtomicBool,
+) -> Result<bool> {
     let mut command = crate::process::command(std::ffi::OsStr::new("pnpm"));
     command
         .arg("install")
         .arg(if frozen { "--frozen-lockfile" } else { "--no-frozen-lockfile" })
+        .args(layout.install_args()?)
         .current_dir(workspace);
     let status = verify_signals::run(&mut command, cancelled)
         .context("running pnpm install under existing project policies")?;
@@ -453,7 +462,7 @@ pub fn recover(project: &Path, journal: &Path) -> Result<ExitCode> {
     snapshot.checkpoint(&paths)?;
     snapshot.refresh_recovery(journal)?;
     layout.preflight()?;
-    let installed = install(snapshot.workspace_root(), true, signals.flag())?;
+    let installed = install(snapshot.workspace_root(), &layout, true, signals.flag())?;
     snapshot.checkpoint(&snapshot.lockfiles())?;
     snapshot.refresh_recovery(journal)?;
     snapshot.verify_unchanged()?;
