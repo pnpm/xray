@@ -212,6 +212,17 @@ fn export_patterns_include_nested_matching_files() {
 }
 
 #[test]
+fn export_targets_substitute_every_star() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","exports":{"./*":"./dist/*/*.js"}"#));
+    write(&dir.join("dist/button/button.js"), "require('missing-one');");
+    write(&dir.join("dist/a/b/a/b.js"), "require('missing-two');");
+    write(&dir.join("dist/button/other.js"), "require('not-exported');");
+    assert_eq!(names(&dir), ["dist/a/b/a/b.js", "dist/button/button.js"]);
+}
+
+#[test]
 fn specific_export_keys_override_wildcards_including_null_exclusions() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("pkg");

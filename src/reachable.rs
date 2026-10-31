@@ -312,7 +312,8 @@ fn declaration_companion(file: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Export patterns substitute the same `*` with a subpath, including slashes.
+/// Export patterns substitute every `*` in a target with the same subpath,
+/// including slashes.
 /// Enumerating shipped files makes these entries visible without following
 /// symlinks into other packages or scanning nested bundled dependencies.
 fn expand_entry(
@@ -321,12 +322,15 @@ fn expand_entry(
     export_key: Option<&str>,
     manifest: &Manifest,
 ) -> Vec<PathBuf> {
-    let Some((prefix, suffix)) = pattern.split_once('*') else {
+    if !pattern.contains('*') {
         return resolve_relative(root, pattern).into_iter().collect();
-    };
-    if suffix.contains('*') || pattern.starts_with('/') {
+    }
+    if pattern.starts_with('/') {
         return Vec::new();
     }
+    let parts: Vec<&str> = pattern.split('*').collect();
+    let literal_len: usize = parts.iter().map(|part| part.len()).sum();
+    let stars = parts.len() - 1;
     WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -335,9 +339,12 @@ fn expand_entry(
         .filter(|entry| entry.file_type().is_file() && scan::is_scannable(entry.path()))
         .filter_map(|entry| {
             let relative = entry.path().strip_prefix(root).ok()?.to_str()?.replace('\\', "/");
-            let middle = relative.strip_prefix(prefix)?.strip_suffix(suffix)?;
-            // Node substitutes the same value for each star in a target.
-            if middle.is_empty() {
+            // Node substitutes the same value for each star in a target, so
+            // its length follows from the path's, and the target written out
+            // with it has to be the path itself.
+            let middle_len = relative.len().checked_sub(literal_len)? / stars;
+            let middle = relative.get(parts[0].len()..parts[0].len() + middle_len)?;
+            if middle.is_empty() || parts.join(middle) != relative {
                 return None;
             }
             if let Some(key) = export_key {
