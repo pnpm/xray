@@ -868,6 +868,7 @@ dependencies = [
  "command-group",
  "ctrlc",
  "globset",
+ "libc",
  "node-semver",
  "oxc_allocator",
  "oxc_ast",
