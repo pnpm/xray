@@ -9,6 +9,7 @@ fn medplum() -> Vec<PackageReport> {
             declared_range: Some("5.1.15".to_string()),
             severity: Severity::DevDependency,
             origin: Origin::Types,
+            evidence: std::collections::BTreeSet::new(),
         }],
     }]
 }
@@ -44,6 +45,7 @@ fn versions_are_separate_and_repeated_peer_contexts_are_merged() {
             declared_range: None,
             severity: Severity::Undeclared,
             origin: Origin::Runtime,
+            evidence: std::collections::BTreeSet::new(),
         }],
     });
     reports.push(PackageReport {
@@ -53,6 +55,7 @@ fn versions_are_separate_and_repeated_peer_contexts_are_merged() {
             declared_range: None,
             severity: Severity::Undeclared,
             origin: Origin::Runtime,
+            evidence: std::collections::BTreeSet::new(),
         }],
     });
     let rendered = as_package_extensions(&reports);
@@ -85,12 +88,14 @@ fn text_separates_the_two_kinds_of_finding() {
                 declared_range: Some("^1".to_string()),
                 severity: Severity::DevDependency,
                 origin: Origin::Types,
+                evidence: std::collections::BTreeSet::new(),
             },
             Finding {
                 dependency: "unknown".to_string(),
                 declared_range: None,
                 severity: Severity::Undeclared,
                 origin: Origin::Runtime,
+                evidence: std::collections::BTreeSet::new(),
             },
         ],
     }];
@@ -111,6 +116,7 @@ fn publisher_local_ranges_are_not_copied_to_consumers() {
                 declared_range: Some(range.into()),
                 severity: Severity::DevDependency,
                 origin: Origin::Runtime,
+                evidence: std::collections::BTreeSet::new(),
             }],
         }];
         let rendered = as_package_extensions(&reports);
@@ -133,6 +139,7 @@ fn peer_context_duplicates_merge_origins_without_losing_findings() {
                 declared_range: Some("^1".into()),
                 severity: Severity::DevDependency,
                 origin: Origin::Types,
+                evidence: std::collections::BTreeSet::new(),
             }],
         },
         PackageReport {
@@ -142,6 +149,7 @@ fn peer_context_duplicates_merge_origins_without_losing_findings() {
                 declared_range: Some("^1".into()),
                 severity: Severity::DevDependency,
                 origin: Origin::Runtime,
+                evidence: std::collections::BTreeSet::new(),
             }],
         },
     ];
@@ -150,4 +158,22 @@ fn peer_context_duplicates_merge_origins_without_losing_findings() {
     assert_eq!(merged[0].findings.len(), 1);
     assert_eq!(merged[0].findings[0].origin, Origin::Both);
     assert_eq!(merged[0].findings[0].declared_range.as_deref(), Some("^1"));
+}
+
+#[test]
+fn portable_ranges_follow_npm_semver_including_prereleases() {
+    for range in ["^2.0.0-beta.1", ">=1.2 <3", "1.0.0 || ^2.0.0", "~1.2", "*"] {
+        assert!(crate::report::registry_range(range), "{range}");
+    }
+    for range in [
+        "",
+        "v",
+        "file:../helper",
+        "workspace:^",
+        "github:example/helper",
+        "latest",
+        "not a version",
+    ] {
+        assert!(!crate::report::registry_range(range), "{range}");
+    }
 }

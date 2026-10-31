@@ -1,16 +1,19 @@
 use crate::scan::Origin;
 use anyhow::Result;
 use serde::Serialize;
-use std::{collections::BTreeMap, fmt::Write as _};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
+};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackageReport {
     pub package: String,
     pub findings: Vec<Finding>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Finding {
     pub dependency: String,
@@ -19,6 +22,20 @@ pub struct Finding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub declared_range: Option<String>,
     pub severity: Severity,
+    pub origin: Origin,
+    pub evidence: BTreeSet<Evidence>,
+}
+
+/// A source reference, using package-relative paths and one-based positions.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Evidence {
+    pub file: String,
+    #[serde(skip_serializing_if = "is_unknown_position")]
+    pub line: usize,
+    #[serde(skip_serializing_if = "is_unknown_position")]
+    pub column: usize,
+    pub specifier: String,
     pub origin: Origin,
 }
 
@@ -41,6 +58,7 @@ pub fn merge_reports(reports: Vec<PackageReport>) -> Vec<PackageReport> {
         for finding in report.findings {
             if let Some(existing) = dependencies.get_mut(&finding.dependency) {
                 existing.origin = existing.origin.merged(finding.origin);
+                existing.evidence.extend(finding.evidence);
                 if existing.declared_range != finding.declared_range {
                     existing.declared_range = None;
                 }
@@ -81,6 +99,17 @@ pub fn as_text(reports: &[PackageReport]) -> String {
                 Origin::Both => "code and types",
             };
             let _ = writeln!(out, "  {} — {note}, used in {where_from}", finding.dependency);
+            for evidence in &finding.evidence {
+                if evidence.line == 0 {
+                    let _ = writeln!(out, "    {} ({})", evidence.file, evidence.specifier);
+                    continue;
+                }
+                let _ = writeln!(
+                    out,
+                    "    {}:{}:{} ({})",
+                    evidence.file, evidence.line, evidence.column, evidence.specifier,
+                );
+            }
         }
         out.push('\n');
     }
@@ -155,7 +184,11 @@ mod tests;
 
 /// Only portable registry ranges can be copied from a publisher's build setup.
 /// Local paths and workspace protocols refer to the publisher's checkout.
-fn registry_range(range: &str) -> bool {
-    !range.is_empty()
-        && range.chars().all(|ch| ch.is_ascii_digit() || "vVxX*^~<>=|.-+ ".contains(ch))
+pub fn registry_range(range: &str) -> bool {
+    !range.trim().is_empty() && range.parse::<node_semver::Range>().is_ok()
+}
+
+#[expect(clippy::trivially_copy_pass_by_ref, reason = "serde skip predicates receive a reference")]
+const fn is_unknown_position(position: &usize) -> bool {
+    *position == 0
 }

@@ -25,6 +25,34 @@ fn follows_relative_imports_out_of_the_entry_points() {
 }
 
 #[test]
+fn javascript_entries_and_their_children_include_declaration_companions() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", ""));
+    write(&dir.join("index.js"), "require('./lib/feature');");
+    write(&dir.join("index.d.ts"), "export * from './lib/feature';");
+    write(&dir.join("lib/feature.js"), "module.exports = 1;");
+    write(&dir.join("lib/feature.d.ts"), "import type { X } from 'missing';");
+    assert_eq!(names(&dir), ["index.d.ts", "index.js", "lib/feature.d.ts", "lib/feature.js"]);
+    let report =
+        crate::analyze::analyze_for_repair(&dir, crate::analyze::Scope::Declared).unwrap().unwrap();
+    assert_eq!(report.findings[0].dependency, "missing");
+}
+
+#[test]
+fn types_versions_entries_do_not_hide_the_default_javascript_entry() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest("pkg", r#","typesVersions":{"*":{"feature":["types/feature.d.ts"]}}"#),
+    );
+    write(&dir.join("index.js"), "require('runtime');");
+    write(&dir.join("types/feature.d.ts"), "import 'types-dependency';");
+    assert_eq!(names(&dir), ["index.js", "types/feature.d.ts"]);
+}
+
+#[test]
 fn a_package_with_no_entry_field_still_has_an_index() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("pkg");

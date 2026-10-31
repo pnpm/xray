@@ -43,6 +43,8 @@ pub struct Manifest {
     #[serde(default)]
     pub typings: Value,
     #[serde(default)]
+    pub types_versions: Value,
+    #[serde(default)]
     pub bin: Value,
     #[serde(default)]
     pub exports: Value,
@@ -132,7 +134,7 @@ impl Manifest {
                 add_paths(field, None);
             }
         }
-        for field in [&self.types, &self.typings, &self.bin] {
+        for field in [&self.types, &self.typings, &self.bin, &self.types_versions] {
             add_paths(field, None);
         }
         paths

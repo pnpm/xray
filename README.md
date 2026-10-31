@@ -56,15 +56,54 @@ Output the findings as JSON:
 xray --json
 ```
 
+## Observe computed imports
+
+Run a failing command through Node's resolution hooks (Node 22.15 or newer):
+
+```sh
+xray --trace -- pnpm test
+xray /path/to/project --trace -- node reproduce.cjs
+```
+
+The command runs in the selected project and keeps its output and exit status.
+Xray reports failed resolutions from installed packages on stderr, including
+computed imports a static scan cannot name. Some failures are caught optional
+integrations, so these observations do not automatically become fixes. Workspace
+source failures and already-declared dependencies are excluded. Custom loaders or
+processes that replace `NODE_OPTIONS` can bypass the hook. Runtime observations
+include a filename and specifier; static findings also have line and column.
+
 ## Fixing what it finds
 
-`--package-extensions` emits a ready-to-paste block. When the publisher listed
-a portable version range in devDependencies for a type-only reference, it adds
-that dependency:
+Preview selected repairs, apply them, then let pnpm update its lockfile and links:
+
+```sh
+xray --fix --dry-run
+xray --fix
+pnpm install
+```
+
+`--fix` merges version-specific extensions into `pnpm-workspace.yaml`, preserving
+comments, unrelated settings and existing extensions. Conflicting settings are
+reported without writing the file. Running it twice does not duplicate entries.
+It scans declared entry points and their imports, including declarations; use
+`--fix --all-files` for deep imports outside that graph. A parse failure in that
+surface stops the repair so incomplete evidence cannot silently become a fix.
+
+The planner uses portable author development ranges for missing type dependencies.
+It links existing runtime providers as optional peers, leaving unused integrations
+uninstalled. Type-only imports can be satisfied by an installed `@types` package;
+when its version is unambiguous, the repair installs that exact type package.
+Findings without a selected repair remain visible in the scan output.
+
+Print the selected block instead of applying it:
 
 ```sh
 xray --package-extensions
 ```
+
+A standalone `--package` scan has no project provider context and emits all
+candidate extensions for review. A typical type dependency repair is:
 
 ```yaml
 packageExtensions:
@@ -122,7 +161,8 @@ Every file a package ships as behaviour or as types — `.js`, `.mjs`, `.cjs`,
 `import()`, type-position `import("pkg")`, `import x = require("pkg")`, and
 `/// <reference types="pkg" />`.
 
-Findings say where the reference was found. A dependency reached from executable
+Findings include package-relative filenames, one-based line and column numbers,
+the original import specifier, and whether each reference is code or types. A dependency reached from executable
 code breaks the program when it is missing. One reached only from declarations
 breaks type checking instead — which is why no runtime detector can see it, and
 why Yarn's Plug'n'Play, which finds undeclared dependencies by failing at

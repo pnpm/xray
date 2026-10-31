@@ -107,3 +107,32 @@ It passed 3,773 tests with one skipped. After reinstalling with
 test command passed with the same counts. The root Vitest symlink resolved into
 the global store's `links` directory. These tests did not expose a further
 registry-package failure; integration and browser suites were not run.
+
+## Follow-up: two type failures found in Vite's dependencies
+
+The Vite scan identified `@volar/typescript@2.4.28`, whose reachable
+`lib/protocol/createSys.d.ts` references `@volar/language-service` even though
+the latter is only a development dependency of the published package. In a new
+global-store workspace with `hoist: false`, install `@volar/typescript@2.4.28`
+and `typescript@5.9.3`. An `index.ts` containing
+`import * as volar from '@volar/typescript'; console.log(volar);` fails with
+TS2307 when checked with:
+
+```sh
+node node_modules/typescript/bin/tsc --noEmit --module nodenext --moduleResolution nodenext --target es2022 index.ts
+```
+
+Applying the entire xray-generated extension and reinstalling makes that command
+pass. The extension adds `@volar/language-service@2.4.28` as a dependency and
+an optional `typescript` peer.
+
+The same scan found an unresolved repair gap in
+`@rollup/plugin-dynamic-import-vars@2.1.4`: its types import `estree` without a
+declaration. A global-store workspace with this plugin, `rollup@4.64.9`,
+`@types/estree@1.0.8`, and `typescript@5.9.3` fails TS2307 when compiling an
+`index.ts` that imports the plugin, even when the consumer has the types package.
+Use the command above with `--target esnext`. The complete generated extension
+suggests optional peer `estree` and leaves this error unchanged. Replacing that
+entry with dependency `@types/estree: 1.0.8` makes the check pass. This is a
+known limitation: the source module specifier alone does not prove which
+published `@types` package and version should be installed.

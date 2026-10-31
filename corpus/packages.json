@@ -80,5 +80,51 @@
     "maxFindings": 0,
     "maxDiagnosticLines": 0,
     "evidence": "ES module package using node builtins and relative imports; neither requires an npm dependency."
+  },
+  {
+    "name": "@volar/typescript",
+    "version": "2.4.28",
+    "url": "https://registry.npmjs.org/@volar/typescript/-/typescript-2.4.28.tgz",
+    "sha512": "25aeb2bd6adb8acd90b4de029402ab79e5193d560c0110d8665f4b304bf5890d5075ea41eb09f48d347103d31fb589986b80d0e24fc369266914f51fc65f208b",
+    "expected": [
+      {
+        "dependency": "@volar/language-service",
+        "severity": "devDependency",
+        "origin": "types",
+        "declaredRange": "2.4.28"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The published declaration createSys.d.ts imports @volar/language-service, declared only in devDependencies."
+  },
+  {
+    "name": "jss-plugin-rule-value-function",
+    "version": "10.1.1",
+    "url": "https://registry.npmjs.org/jss-plugin-rule-value-function/-/jss-plugin-rule-value-function-10.1.1.tgz",
+    "sha512": "0a557596f27795a53d95ad42533683ba011cc27a633d3b89d321b2d98b5c53e806ff0f473089c3e6f12fef1280cf9dc19385a2266e6e2ce125484b211f284a37",
+    "expected": [
+      {
+        "dependency": "tiny-warning",
+        "severity": "undeclared",
+        "origin": "runtime"
+      }
+    ],
+    "maxDiagnosticLines": 1,
+    "evidence": "The CommonJS entry directly requires tiny-warning, omitted from the manifest; src/index.js contains Flow, which is currently unsupported."
+  },
+  {
+    "name": "@rollup/plugin-dynamic-import-vars",
+    "version": "2.1.4",
+    "url": "https://registry.npmjs.org/@rollup/plugin-dynamic-import-vars/-/plugin-dynamic-import-vars-2.1.4.tgz",
+    "sha512": "319481fa5052a9388c684f79fcad79f5b4507156d0ba03335792db5d08059238cf3025c5ab57605472fbcece9d882a3012f895c50ffa0071cb98303554318623",
+    "expected": [
+      {
+        "dependency": "estree",
+        "severity": "undeclared",
+        "origin": "types"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "Shipped declarations import estree. Real consumers require @types/estree; an optional peer on estree does not repair the missing type dependency."
   }
 ]

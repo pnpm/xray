@@ -2,6 +2,7 @@
 mod tests;
 
 use crate::{manifest::Manifest, scan};
+use anyhow::{Context, Result};
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
@@ -23,6 +24,23 @@ const EXTENSIONS: &[&str] =
 /// own code — and their dependencies belong to whoever runs them, not to
 /// whoever installs this.
 pub fn reachable_files(package_dir: &Path, manifest: &Manifest) -> BTreeSet<PathBuf> {
+    reachable_files_inner(package_dir, manifest, false).unwrap_or_default()
+}
+
+/// Refuse to infer a complete reachable graph when a source file cannot be read
+/// or parsed. Repairs must not be based on an incomplete graph.
+pub fn reachable_files_for_repair(
+    package_dir: &Path,
+    manifest: &Manifest,
+) -> Result<BTreeSet<PathBuf>> {
+    reachable_files_inner(package_dir, manifest, true)
+}
+
+fn reachable_files_inner(
+    package_dir: &Path,
+    manifest: &Manifest,
+    strict: bool,
+) -> Result<BTreeSet<PathBuf>> {
     // Resolved paths are canonical, so the root has to be too for the
     // containment check below to mean anything.
     let root = package_dir.canonicalize().unwrap_or_else(|_| package_dir.to_path_buf());
@@ -33,11 +51,22 @@ pub fn reachable_files(package_dir: &Path, manifest: &Manifest) -> BTreeSet<Path
         if !seen.insert(file.clone()) {
             continue;
         }
-        let Ok(source) = std::fs::read_to_string(&file) else {
-            continue;
+        if let Some(companion) = declaration_companion(&file) {
+            if companion.starts_with(&root) {
+                queue.push(companion);
+            }
+        }
+        let source = match std::fs::read_to_string(&file) {
+            Ok(source) => source,
+            Err(error) if strict => {
+                return Err(error).with_context(|| format!("reading source {}", file.display()))
+            }
+            Err(_) => continue,
         };
-        let Ok(found) = scan::specifiers(&source, &file) else {
-            continue;
+        let found = match scan::specifiers(&source, &file) {
+            Ok(found) => found,
+            Err(reason) if strict => anyhow::bail!("could not parse {}: {reason}", file.display()),
+            Err(_) => continue,
         };
         let parent = file.parent().unwrap_or(package_dir);
         for (requirement, _origin) in found {
@@ -67,7 +96,7 @@ pub fn reachable_files(package_dir: &Path, manifest: &Manifest) -> BTreeSet<Path
             }
         }
     }
-    seen
+    Ok(seen)
 }
 
 fn entry_files(package_dir: &Path, manifest: &Manifest) -> Vec<PathBuf> {
@@ -88,10 +117,22 @@ fn entry_files(package_dir: &Path, manifest: &Manifest) -> Vec<PathBuf> {
     // A package with no entry-point field is still importable through the name
     // Node falls back to. One whose `exports` names nothing scannable is not:
     // an unexported `index.js` beside it is exactly what the map excludes.
-    if entries.is_empty() && !manifest.is_encapsulated() {
+    if !manifest.is_encapsulated() && (entries.is_empty() || manifest.main.is_null()) {
         entries.extend(resolve_relative(package_dir, "index"));
     }
     entries
+}
+
+/// TypeScript substitutes the corresponding declaration for a JavaScript
+/// module, even when the manifest omits an explicit types entry.
+fn declaration_companion(file: &Path) -> Option<PathBuf> {
+    let name = file.to_str()?;
+    for (extension, declaration) in [(".mjs", ".d.mts"), (".cjs", ".d.cts"), (".js", ".d.ts")] {
+        if let Some(stem) = name.strip_suffix(extension) {
+            return existing_file(Path::new(&format!("{stem}{declaration}")));
+        }
+    }
+    None
 }
 
 /// Export patterns substitute the same `*` with a subpath, including slashes.

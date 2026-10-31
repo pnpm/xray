@@ -125,6 +125,95 @@ fn imports_map_targets_are_followed_and_external_dependencies_reported() {
 }
 
 #[test]
+fn findings_include_all_precise_source_references_and_import_aliases() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest(
+            "pkg",
+            r##","exports":"./index.js","types":"./index.d.ts","imports":{"#dep":"missing"}"##,
+        ),
+    );
+    let script = "import a from 'missing';\nrequire('#dep');\nimport('missing');\n";
+    let types = "/// <reference types=\"missing\" />\nimport type { A } from 'missing';\nexport =       function entry(): void;\n";
+    write(&dir.join("index.js"), script);
+    write(&dir.join("index.d.ts"), types);
+    let report = analyze(&dir, Scope::Declared).unwrap().unwrap();
+    let missing = report.findings.iter().find(|finding| finding.dependency == "missing").unwrap();
+    assert_eq!(missing.origin, Origin::Both);
+    let locations: Vec<_> = missing
+        .evidence
+        .iter()
+        .map(|item| {
+            (item.file.as_str(), item.line, item.column, item.specifier.as_str(), item.origin)
+        })
+        .collect();
+    assert_eq!(
+        locations,
+        [
+            ("index.d.ts", 2, 24, "missing", Origin::Types),
+            ("index.js", 1, 15, "missing", Origin::Runtime),
+            ("index.js", 2, 9, "#dep", Origin::Runtime),
+            ("index.js", 3, 8, "missing", Origin::Runtime),
+        ]
+    );
+    let types_reference =
+        report.findings.iter().find(|finding| finding.dependency == "@types/missing").unwrap();
+    let reference = types_reference.evidence.first().unwrap();
+    assert_eq!((reference.file.as_str(), reference.line, reference.column), ("index.d.ts", 1, 1));
+    let json = crate::report::as_json(&[report]).unwrap();
+    assert!(json.contains("\"specifier\": \"#dep\""));
+}
+
+#[test]
+fn types_only_import_uses_the_authors_dev_types_package() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest("pkg", r#","devDependencies":{"@types/example":"^2"}"#),
+    );
+    write(&dir.join("index.d.ts"), "import type { A } from 'example';");
+    let report = analyze(&dir, Scope::Declared).unwrap().unwrap();
+    assert_eq!(report.findings[0].dependency, "@types/example");
+    assert_eq!(report.findings[0].declared_range.as_deref(), Some("^2"));
+    assert_eq!(report.findings[0].evidence.first().unwrap().specifier, "example");
+}
+
+#[test]
+fn repair_rejects_unparsable_source_even_when_other_findings_exist() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","exports":"./index.js""#));
+    write(&dir.join("index.js"), "require('missing'); require('./broken.js');");
+    write(&dir.join("broken.js"), "export const = ;");
+    assert!(analyze(&dir, Scope::Declared).unwrap().is_some());
+    for scope in [Scope::Declared, Scope::EveryFile] {
+        let error = crate::analyze::analyze_for_repair(&dir, scope).unwrap_err().to_string();
+        assert!(error.contains("broken.js"), "{error}");
+    }
+}
+
+#[test]
+fn repair_without_exports_follows_entries_not_unrelated_source() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","main":"./index.js""#));
+    write(&dir.join("index.js"), "require('missing');");
+    write(&dir.join("src/unrelated.js"), "export const = ;");
+    let report = crate::analyze::analyze_for_repair(&dir, Scope::Declared).unwrap().unwrap();
+    assert_eq!(report.findings[0].dependency, "missing");
+    assert!(crate::analyze::analyze_for_repair(&dir, Scope::EveryFile).is_err());
+    write(&dir.join("index.js"), "require('missing'); require('./src/unrelated.js');");
+    assert!(crate::analyze::analyze_for_repair(&dir, Scope::Declared).is_err());
+}
+
+#[test]
 fn unreadable_source_cannot_be_reported_as_clean() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join("package.json"), r#"{"name":"example","version":"1.0.0"}"#)

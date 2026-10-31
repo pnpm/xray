@@ -22,6 +22,17 @@ use std::{collections::BTreeSet, path::Path};
 /// Returns `Err` when the file could not be parsed. Callers must report that
 /// rather than treat it as a file with nothing to find.
 pub fn specifiers(source: &str, path: &Path) -> Result<BTreeSet<(Requirement, Origin)>, String> {
+    Ok(references(source, path)?
+        .into_iter()
+        .map(|(requirement, origin, _)| (requirement, origin))
+        .collect())
+}
+
+/// References with the byte offset of the source literal (or directive).
+pub fn references(
+    source: &str,
+    path: &Path,
+) -> Result<BTreeSet<(Requirement, Origin, u32)>, String> {
     let allocator = Allocator::default();
     // Some published declaration generators emit `export = function name(...)`
     // signatures, which Oxc rejects. Parse the equivalent declaration on a
@@ -64,7 +75,7 @@ pub fn specifiers(source: &str, path: &Path) -> Result<BTreeSet<(Requirement, Or
         found.extend(
             triple_slash_references(&parsed)
                 .into_iter()
-                .map(|name| (Requirement::TypesReference(name), Origin::Types)),
+                .map(|(name, offset)| (Requirement::TypesReference(name), Origin::Types, offset)),
         );
     }
     Ok(found)
@@ -164,7 +175,14 @@ fn normalize_export_assignment(source: &str) -> String {
                 if let Some(after_equals) = after_export.strip_prefix('=') {
                     let after_equals = after_equals.trim_start();
                     if after_equals.starts_with("function ") {
-                        return format!("{}declare {after_equals}", &line[..leading]);
+                        let prefix_len = line.len() - leading - after_equals.len();
+                        if prefix_len > "declare".len() {
+                            return format!(
+                                "{}declare{}{after_equals}",
+                                &line[..leading],
+                                " ".repeat(prefix_len - "declare".len())
+                            );
+                        }
                     }
                 }
             }
@@ -185,63 +203,63 @@ fn finish(parsed: oxc_parser::ParserReturn<'_>) -> Result<oxc_ast::ast::Program<
 
 struct Collector<'a> {
     default_origin: Origin,
-    found: BTreeSet<(Requirement, Origin)>,
+    found: BTreeSet<(Requirement, Origin, u32)>,
     scoping: &'a Scoping,
     require_bindings: BTreeSet<SymbolId>,
 }
 
 impl Collector<'_> {
-    fn record(&mut self, specifier: &str) {
+    fn record(&mut self, specifier: &str, offset: u32) {
         let origin = self.default_origin;
-        self.found.insert((Requirement::Module(specifier.to_string()), origin));
+        self.found.insert((Requirement::Module(specifier.to_string()), origin, offset));
     }
 
     /// A position TypeScript erases: it needs the package to type check and
     /// never reaches it at run time, whatever kind of file it sits in.
-    fn record_type_only(&mut self, specifier: &str) {
-        self.found.insert((Requirement::Module(specifier.to_string()), Origin::Types));
+    fn record_type_only(&mut self, specifier: &str, offset: u32) {
+        self.found.insert((Requirement::Module(specifier.to_string()), Origin::Types, offset));
     }
 }
 
 impl<'a> Visit<'a> for Collector<'_> {
     fn visit_import_declaration(&mut self, decl: &ImportDeclaration<'a>) {
         if decl.import_kind.is_type() {
-            self.record_type_only(decl.source.value.as_str());
+            self.record_type_only(decl.source.value.as_str(), decl.source.span.start);
         } else {
-            self.record(decl.source.value.as_str());
+            self.record(decl.source.value.as_str(), decl.source.span.start);
         }
     }
 
     fn visit_export_from_declaration(&mut self, decl: &ExportFromDeclaration<'a>) {
         if decl.export_kind.is_type() {
-            self.record_type_only(decl.source.value.as_str());
+            self.record_type_only(decl.source.value.as_str(), decl.source.span.start);
         } else {
-            self.record(decl.source.value.as_str());
+            self.record(decl.source.value.as_str(), decl.source.span.start);
         }
     }
 
     fn visit_export_all_declaration(&mut self, decl: &ExportAllDeclaration<'a>) {
         if decl.export_kind.is_type() {
-            self.record_type_only(decl.source.value.as_str());
+            self.record_type_only(decl.source.value.as_str(), decl.source.span.start);
         } else {
-            self.record(decl.source.value.as_str());
+            self.record(decl.source.value.as_str(), decl.source.span.start);
         }
     }
 
     fn visit_import_expression(&mut self, expr: &ImportExpression<'a>) {
         if let Expression::StringLiteral(literal) = &expr.source {
-            self.record(literal.value.as_str());
+            self.record(literal.value.as_str(), literal.span.start);
         }
         walk::walk_import_expression(self, expr);
     }
 
     fn visit_ts_import_type(&mut self, ty: &TSImportType<'a>) {
-        self.record_type_only(ty.source.value.as_str());
+        self.record_type_only(ty.source.value.as_str(), ty.source.span.start);
         walk::walk_ts_import_type(self, ty);
     }
 
     fn visit_ts_external_module_reference(&mut self, reference: &TSExternalModuleReference<'a>) {
-        self.record(reference.expression.value.as_str());
+        self.record(reference.expression.value.as_str(), reference.expression.span.start);
     }
 
     /// `require("pkg")` and `require.resolve("pkg")`. A call whose argument is
@@ -250,7 +268,7 @@ impl<'a> Visit<'a> for Collector<'_> {
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
         if is_require(&call.callee, self.scoping, &self.require_bindings) {
             if let Some(Argument::StringLiteral(literal)) = call.arguments.first() {
-                self.record(literal.value.as_str());
+                self.record(literal.value.as_str(), literal.span.start);
             }
         }
         walk::walk_call_expression(self, call);
@@ -398,19 +416,22 @@ fn is_node_module_load(call: &CallExpression<'_>, scoping: &Scoping) -> bool {
         && matches!(call.arguments.first(), Some(Argument::StringLiteral(name)) if matches!(name.value.as_str(), "module" | "node:module"))
 }
 
-fn triple_slash_references(program: &Program<'_>) -> Vec<String> {
+fn triple_slash_references(program: &Program<'_>) -> Vec<(String, u32)> {
     const MARKER: &str = "<reference types=";
     program
         .comments
         .iter()
         .filter_map(|comment| {
-            program.source_text.get(comment.span.start as usize..comment.span.end as usize)
+            program
+                .source_text
+                .get(comment.span.start as usize..comment.span.end as usize)
+                .map(|line| (line, comment.span.start))
         })
-        .filter(|line| line.starts_with("///"))
-        .filter_map(|line| {
+        .filter(|(line, _)| line.starts_with("///"))
+        .filter_map(|(line, offset)| {
             let rest = line.split_once(MARKER)?.1.trim_start();
             let quote = rest.chars().next()?;
-            rest[quote.len_utf8()..].split(quote).next().map(str::to_string)
+            rest[quote.len_utf8()..].split(quote).next().map(|name| (name.to_string(), offset))
         })
         .collect()
 }
