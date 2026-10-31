@@ -59,7 +59,7 @@ fn parse_source(source: &str, syntax: Syntax) -> Result<Vec<StyleReference>, Str
         return Err(format!("{:?}", parser.recoverable_errors()[0]));
     }
     let mut references = Vec::new();
-    collect(&ast.statements, &mut references);
+    collect(&ast.statements, syntax, &mut references);
     Ok(references)
 }
 
@@ -207,44 +207,92 @@ fn normalize_ie_star_properties(source: &str) -> String {
     String::from_utf8(bytes).expect("replacing ASCII preserves UTF-8")
 }
 
-fn collect(statements: &[Statement<'_>], out: &mut Vec<StyleReference>) {
+/// How the tool processing a stylesheet treats the path an import names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lookup {
+    /// The preprocessor loads the file, so a bare path can name a package.
+    Load,
+    /// Hand-written CSS: the path is a URL relative to the stylesheet, which
+    /// bundlers also resolve as a package. A single file name (`reset.css`) is
+    /// read as a sibling file; webpack's `~` prefix or a package subpath
+    /// (`pkg/base.css`) asks for a package.
+    CssUrl,
+    /// A preprocessor leaves the rule in its output untouched — a Sass
+    /// `@import` of a `.css` file, a `url()` or with a media query, or a Less
+    /// `(css)` import — or may skip it, as with Less `(optional)`. Nothing has
+    /// to be installed for the stylesheet to build; only webpack's `~` prefix
+    /// still names a package.
+    PassThrough,
+}
+
+fn collect(statements: &[Statement<'_>], syntax: Syntax, out: &mut Vec<StyleReference>) {
     for statement in statements {
         match statement {
             Statement::AtRule(rule) => {
                 if let Some(prelude) = &rule.prelude {
                     match prelude {
                         AtRulePrelude::Import(import) => {
-                            add_href(&import.href, StyleKind::Import, out);
+                            let lookup = match syntax {
+                                Syntax::Css => Lookup::CssUrl,
+                                Syntax::Less => less_lookup(&import.href, &[]),
+                                Syntax::Scss | Syntax::Sass => {
+                                    let plain_css =
+                                        matches!(import.href, ImportPreludeHref::Url(_))
+                                            || import.media.is_some()
+                                            || import.supports.is_some()
+                                            || import.layer.is_some()
+                                            || href_value(&import.href)
+                                                .is_some_and(has_css_extension);
+                                    if plain_css {
+                                        Lookup::PassThrough
+                                    } else {
+                                        Lookup::Load
+                                    }
+                                }
+                            };
+                            add_href(&import.href, StyleKind::Import, lookup, out);
                         }
                         AtRulePrelude::LessImport(import) => {
-                            add_href(&import.href, StyleKind::Import, out);
+                            let options: Vec<String> = import
+                                .options
+                                .names
+                                .iter()
+                                .map(|name| name.name.to_ascii_lowercase())
+                                .collect();
+                            let lookup = less_lookup(&import.href, &options);
+                            add_href(&import.href, StyleKind::Import, lookup, out);
                         }
                         AtRulePrelude::SassImport(import) => {
                             for path in &import.paths {
-                                add_str(path, StyleKind::Import, out);
+                                let lookup = if has_css_extension(&path.value) {
+                                    Lookup::PassThrough
+                                } else {
+                                    Lookup::Load
+                                };
+                                add_str(path, StyleKind::Import, lookup, out);
                             }
                         }
                         AtRulePrelude::SassUse(import) => {
-                            add_interpolable(&import.path, StyleKind::Use, out);
+                            add_interpolable(&import.path, StyleKind::Use, Lookup::Load, out);
                         }
                         AtRulePrelude::SassForward(import) => {
-                            add_interpolable(&import.path, StyleKind::Forward, out);
+                            add_interpolable(&import.path, StyleKind::Forward, Lookup::Load, out);
                         }
                         _ => {}
                     }
                 }
                 if let Some(block) = &rule.block {
-                    collect(&block.statements, out);
+                    collect(&block.statements, syntax, out);
                 }
             }
-            Statement::QualifiedRule(rule) => collect(&rule.block.statements, out),
+            Statement::QualifiedRule(rule) => collect(&rule.block.statements, syntax, out),
             Statement::SassIfAtRule(rule) => {
-                collect(&rule.if_clause.block.statements, out);
+                collect(&rule.if_clause.block.statements, syntax, out);
                 for clause in &rule.else_if_clauses {
-                    collect(&clause.block.statements, out);
+                    collect(&clause.block.statements, syntax, out);
                 }
                 if let Some(block) = &rule.else_clause {
-                    collect(&block.statements, out);
+                    collect(&block.statements, syntax, out);
                 }
             }
             _ => {}
@@ -252,25 +300,76 @@ fn collect(statements: &[Statement<'_>], out: &mut Vec<StyleReference>) {
     }
 }
 
-fn add_href(href: &ImportPreludeHref<'_>, kind: StyleKind, out: &mut Vec<StyleReference>) {
-    match href {
-        ImportPreludeHref::Str(value) => add_interpolable(value, kind, out),
+/// Less loads an import unless it is told the file is CSS, by the `(css)`
+/// option or by a `.css` extension that `(less)` or `(inline)` do not
+/// override. An `(optional)` import builds without its file.
+fn less_lookup(href: &ImportPreludeHref<'_>, options: &[String]) -> Lookup {
+    let has = |option: &str| options.iter().any(|name| name == option);
+    if has("optional") || has("css") {
+        return Lookup::PassThrough;
+    }
+    if has("less") || has("inline") {
+        return Lookup::Load;
+    }
+    let css_extension = href_value(href).is_some_and(|value| {
+        let path = value.split(['?', '#']).next().unwrap_or(value);
+        has_css_extension(path)
+    });
+    if css_extension {
+        Lookup::PassThrough
+    } else {
+        Lookup::Load
+    }
+}
+
+fn has_css_extension(path: &str) -> bool {
+    Path::new(path).extension().is_some_and(|extension| extension.eq_ignore_ascii_case("css"))
+}
+
+fn href_value<'a>(href: &'a ImportPreludeHref<'_>) -> Option<&'a str> {
+    let value = match href {
+        ImportPreludeHref::Str(value) => value,
         ImportPreludeHref::Url(url) => match &url.value {
-            Some(UrlValue::Raw(value)) => add(&value.value, value.span.start, kind, out),
-            Some(UrlValue::Str(value)) => add_interpolable(value, kind, out),
+            Some(UrlValue::Raw(value)) => return Some(&value.value),
+            Some(UrlValue::Str(value)) => value,
+            _ => return None,
+        },
+    };
+    match value {
+        InterpolableStr::Literal(value) => Some(&value.value),
+        InterpolableStr::SassInterpolated(_) | InterpolableStr::LessInterpolated(_) => None,
+    }
+}
+
+fn add_href(
+    href: &ImportPreludeHref<'_>,
+    kind: StyleKind,
+    lookup: Lookup,
+    out: &mut Vec<StyleReference>,
+) {
+    match href {
+        ImportPreludeHref::Str(value) => add_interpolable(value, kind, lookup, out),
+        ImportPreludeHref::Url(url) => match &url.value {
+            Some(UrlValue::Raw(value)) => add(&value.value, value.span.start, kind, lookup, out),
+            Some(UrlValue::Str(value)) => add_interpolable(value, kind, lookup, out),
             _ => {}
         },
     }
 }
-fn add_interpolable(value: &InterpolableStr<'_>, kind: StyleKind, out: &mut Vec<StyleReference>) {
+fn add_interpolable(
+    value: &InterpolableStr<'_>,
+    kind: StyleKind,
+    lookup: Lookup,
+    out: &mut Vec<StyleReference>,
+) {
     if let InterpolableStr::Literal(value) = value {
-        add_str(value, kind, out);
+        add_str(value, kind, lookup, out);
     }
 }
-fn add_str(value: &Str<'_>, kind: StyleKind, out: &mut Vec<StyleReference>) {
-    add(&value.value, value.span.start, kind, out);
+fn add_str(value: &Str<'_>, kind: StyleKind, lookup: Lookup, out: &mut Vec<StyleReference>) {
+    add(&value.value, value.span.start, kind, lookup, out);
 }
-fn add(value: &str, offset: usize, kind: StyleKind, out: &mut Vec<StyleReference>) {
+fn add(value: &str, offset: usize, kind: StyleKind, lookup: Lookup, out: &mut Vec<StyleReference>) {
     // Protocol URLs, network paths and Sass builtins resolve outside npm.
     // Relative paths remain: the reachability walker resolves those first.
     if value.is_empty()
@@ -279,7 +378,16 @@ fn add(value: &str, offset: usize, kind: StyleKind, out: &mut Vec<StyleReference
     {
         return;
     }
-    out.push(StyleReference { specifier: value.into(), offset, kind });
+    let as_written = value.starts_with(['.', '~'])
+        || match lookup {
+            Lookup::Load => true,
+            Lookup::CssUrl => value.trim_start_matches('@').contains('/'),
+            Lookup::PassThrough => false,
+        };
+    // A path that names no package is still followed to a local file, so it
+    // is kept, spelled the way a URL relative to the stylesheet resolves.
+    let specifier = if as_written { value.to_string() } else { format!("./{value}") };
+    out.push(StyleReference { specifier, offset, kind });
 }
 
 #[cfg(test)]
