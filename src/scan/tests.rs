@@ -329,6 +329,28 @@ fn constant_aliases_of_created_require_are_followed() {
 }
 
 #[test]
+fn create_require_foreign_or_opaque_bases_are_not_attributed_to_caller() {
+    let source = "import { createRequire } from 'node:module'; const foreign = createRequire('/other/consumer.cjs'); foreign('not-ours'); const unknown = createRequire(process.cwd() + '/other.cjs'); const alias = unknown; alias.resolve('also-not-ours'); function f(__filename) { const load = createRequire(__filename); load('shadowed-base'); } const local = createRequire(import.meta['url']); local('ours');";
+    assert_eq!(script(source, "index.mjs"), ["node:module", "ours"]);
+}
+
+#[test]
+fn create_require_resolves_relative_to_its_foreign_base_in_node() {
+    let root = tempfile::tempdir().unwrap();
+    let foreign = root.path().join("foreign");
+    let package = foreign.join("node_modules/foreign-only");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("index.js"), "module.exports = 42;").unwrap();
+    let base = serde_json::to_string(&foreign.join("consumer.cjs").to_string_lossy()).unwrap();
+    let source = format!("import {{ createRequire }} from 'node:module'; const load = createRequire({base}); if (load('foreign-only') !== 42) process.exit(1);\n");
+    let entry = root.path().join("caller.mjs");
+    std::fs::write(&entry, &source).unwrap();
+    let output = std::process::Command::new("node").arg(&entry).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(script(&source, "caller.mjs"), ["node:module"]);
+}
+
+#[test]
 fn unrelated_factory_named_create_require_is_not_a_node_loader() {
     let source = "import { createRequire } from 'unrelated'; const load = createRequire(); load('not-a-dependency');";
     assert_eq!(script(source, "index.js"), ["unrelated"]);

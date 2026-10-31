@@ -698,13 +698,36 @@ impl<'a> Visit<'a> for RequireBindings<'_> {
                 }
                 _ => false,
             };
-            if is_factory && self.constant {
+            if is_factory && self.constant && has_local_create_require_base(call, self.scoping) {
                 if let Some(id) = binding.symbol_id.get() {
                     self.bindings.insert(id);
                 }
             }
         }
         walk::walk_variable_declarator(self, decl);
+    }
+}
+
+/// A loader based elsewhere resolves from that location, not its caller. Only
+/// infer ownership when Node's factory is anchored to the current source file.
+fn has_local_create_require_base(call: &CallExpression<'_>, scoping: &Scoping) -> bool {
+    match call.arguments.first() {
+        Some(Argument::Identifier(name)) => {
+            name.name == "__filename"
+                && name
+                    .reference_id
+                    .get()
+                    .and_then(|id| scoping.get_reference(id).symbol_id())
+                    .is_none()
+        }
+        Some(Argument::StaticMemberExpression(member)) => {
+            member.property.name == "url" && matches!(&member.object, Expression::ImportMeta(_))
+        }
+        Some(Argument::ComputedMemberExpression(member)) => {
+            matches!(&member.expression, Expression::StringLiteral(name) if name.value == "url")
+                && matches!(&member.object, Expression::ImportMeta(_))
+        }
+        _ => false,
     }
 }
 

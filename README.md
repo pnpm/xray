@@ -122,6 +122,8 @@ Independent packages can still be repaired; excluded packages are listed on stde
 Static `require.resolve` analysis follows default lookup and the local
 `{ paths: [__dirname] }` form. Foreign or opaque search roots require runtime
 diagnosis because linking a dependency into the caller might not affect that lookup.
+Created loaders are attributed to the caller only when anchored to its
+`import.meta.url` or unshadowed `__filename`.
 
 The planner reuses installed providers as optional peers, including type providers,
 so a publisher's historical development range does not pull in an incompatible
