@@ -148,16 +148,31 @@ pub fn as_text(reports: &[PackageReport]) -> String {
     out
 }
 
-pub fn as_package_extensions(reports: &[PackageReport]) -> String {
-    if reports.is_empty() {
-        return String::new();
-    }
+/// Whether a report's package id can become a selector for exactly one
+/// release. A missing version would select every release (`name@`), and a
+/// version that is not semver (`1.0`) would be read by pnpm as a range.
+pub fn has_extension_selector(report: &PackageReport) -> bool {
+    report.package.rsplit_once('@').is_some_and(|(name, version)| {
+        !name.is_empty() && node_semver::Version::parse(version).is_ok()
+    })
+}
 
+/// Packages left out of `as_package_extensions` because their installed
+/// version cannot select a single release.
+pub fn without_extension_selector(reports: &[PackageReport]) -> Vec<&str> {
+    reports
+        .iter()
+        .filter(|report| !has_extension_selector(report))
+        .map(|report| report.package.as_str())
+        .collect()
+}
+
+pub fn as_package_extensions(reports: &[PackageReport]) -> String {
     // The same version can occur more than once with different peer contexts.
     // Merge those reports, and keep versions separate so a fix for one release
     // does not silently change every other release of the package.
     let mut extensions: BTreeMap<&str, BTreeMap<&str, Option<&str>>> = BTreeMap::new();
-    for report in reports {
+    for report in reports.iter().filter(|report| has_extension_selector(report)) {
         let dependencies = extensions.entry(&report.package).or_default();
         for finding in &report.findings {
             let range = finding
@@ -173,6 +188,9 @@ pub fn as_package_extensions(reports: &[PackageReport]) -> String {
                 })
                 .or_insert(range);
         }
+    }
+    if extensions.is_empty() {
+        return String::new();
     }
     let mut out = String::from("packageExtensions:\n");
     for (package, dependencies) in extensions {

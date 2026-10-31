@@ -27,8 +27,10 @@ pub fn check(existing: &str, proposed: &str) -> Result<()> {
         let selector =
             new_selector.as_str().context("generated extension selector must be a string")?;
         let (name, range) = split_selector(selector);
-        let version = Version::parse(range.context("generated extension must pin a version")?)
-            .context("generated extension must pin a valid version")?;
+        // A selector without one exact version is never generated. If one is
+        // proposed anyway, compare it only with selectors that name the
+        // package without a range, instead of failing the whole repair.
+        let version = range.and_then(|range| Version::parse(range).ok());
         for (old_selector, old_value) in old {
             let old_selector =
                 old_selector.as_str().context("extension selector must be a string")?;
@@ -37,9 +39,10 @@ pub fn check(existing: &str, proposed: &str) -> Result<()> {
                 continue;
             }
             if let Some(range) = old_range {
+                let Some(version) = &version else { continue };
                 let range = Range::parse(range)
                     .with_context(|| format!("cannot assess extension selector {old_selector}"))?;
-                if !range.satisfies(&version) {
+                if !range.satisfies(version) {
                     continue;
                 }
             }

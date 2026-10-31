@@ -73,6 +73,33 @@ fn versions_are_separate_and_repeated_peer_contexts_are_merged() {
 }
 
 #[test]
+fn packages_without_a_semver_version_get_no_extension() {
+    let report = |package: &str| PackageReport {
+        package: package.to_string(),
+        findings: vec![Finding {
+            dependency: "missing".to_string(),
+            declared_range: None,
+            severity: Severity::Undeclared,
+            origin: Origin::Runtime,
+            evidence: std::collections::BTreeSet::new(),
+        }],
+    };
+    let unversioned = vec![report("example@"), report("example@1.0"), report("@scope/pkg@")];
+    assert_eq!(as_package_extensions(&unversioned), "");
+    assert_eq!(
+        crate::report::without_extension_selector(&unversioned),
+        ["example@", "example@1.0", "@scope/pkg@"],
+    );
+    let mut mixed = unversioned;
+    mixed.push(report("@scope/pkg@1.0.0-beta.1"));
+    let rendered = as_package_extensions(&mixed);
+    let documents = YamlLoader::load_from_str(&rendered).unwrap();
+    let extensions = documents[0]["packageExtensions"].as_hash().unwrap();
+    assert_eq!(extensions.len(), 1);
+    assert!(rendered.contains("'@scope/pkg@1.0.0-beta.1':"));
+}
+
+#[test]
 fn nothing_found_produces_no_block_to_paste() {
     assert_eq!(as_package_extensions(&[]), "");
     assert!(as_text(&[]).starts_with("No undeclared dependencies"));

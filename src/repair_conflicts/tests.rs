@@ -39,6 +39,19 @@ fn wildcard_does_not_overlap_prerelease_but_unversioned_selector_does() {
 }
 
 #[test]
+fn a_selector_without_an_exact_version_does_not_fail_the_check() {
+    let existing = "packageExtensions:\n  'example@^1':\n    dependencies:\n      dep: '1'\n";
+    for selector in ["example@", "example@1.0", "example"] {
+        let proposed =
+            format!("packageExtensions:\n  '{selector}':\n    dependencies:\n      dep: '2'\n");
+        assert!(check(existing, &proposed).is_ok(), "{selector}");
+    }
+    let unversioned = "packageExtensions:\n  example:\n    dependencies:\n      dep: '1'\n";
+    let proposed = "packageExtensions:\n  'example@1.0':\n    dependencies:\n      dep: '2'\n";
+    assert!(check(unversioned, proposed).is_err());
+}
+
+#[test]
 fn refuses_a_generated_patch_that_a_user_patch_already_selects() {
     let proposed = "patchedDependencies:\n  'example@1.2.3': 'patches/example@1.2.3.patch'\n";
     for existing in [

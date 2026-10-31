@@ -211,11 +211,12 @@ fn main() -> Result<ExitCode> {
     let rendered = if args.json {
         report::as_json(&reports, packages.len(), &diagnostics)?
     } else if args.package_extensions {
-        if args.package {
-            report::as_package_extensions(&reports)
+        let selected = if args.package {
+            reports
         } else {
-            report::as_package_extensions(&repair_plan::select(&reports, &providers, &workspace)?)
-        }
+            repair_plan::select(&reports, &providers, &workspace)?
+        };
+        report::as_package_extensions(&with_extension_selectors(selected))
     } else if reports.is_empty() && !diagnostics.is_empty() {
         "Scan incomplete; no dependency findings in successfully analyzed files.\n".to_string()
     } else {
@@ -238,13 +239,21 @@ fn run_verified(args: &Args, workspace: &Path) -> Result<ExitCode> {
     })
 }
 
+/// Drop reports whose package version cannot select one release, saying so.
+fn with_extension_selectors(reports: Vec<PackageReport>) -> Vec<PackageReport> {
+    for package in report::without_extension_selector(&reports) {
+        eprintln!("Skipped a package extension for {package}: its version is not valid semver.");
+    }
+    reports.into_iter().filter(report::has_extension_selector).collect()
+}
+
 fn write_repairs(
     args: &Args,
     workspace: &Path,
     reports: &[PackageReport],
     packages: &[PathBuf],
 ) -> Result<()> {
-    let selected = repair_plan::select(reports, packages, workspace)?;
+    let selected = with_extension_selectors(repair_plan::select(reports, packages, workspace)?);
     let regenerated = if args.regenerate_types {
         let proposal = regenerate::propose(&args.path, packages)?;
         for message in proposal.messages {
