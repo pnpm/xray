@@ -59,3 +59,23 @@ dependency pairs; its global-store output had duplicate records. Both scans
 reported a parser warning in `@jridgewell/remapping@2.3.5` declarations.
 No Vite functional suite completed, so these static findings are not confirmed
 runtime failures.
+
+## SvelteKit: focused tests pass in both layouts
+
+At `sveltejs/kit` commit `3da859a9f161d7e57d74a109149b83076664da7d`,
+pnpm 12.14.0 installed the 75-project workspace with scripts disabled and
+hoisting disabled. From `packages/kit`, the project's focused unit test command
+using the root Vitest executable was:
+
+```sh
+node ../../node_modules/vitest/vitest.mjs run -c vitest.kit.config.js
+```
+
+It passed 76 files and 1,124 tests (one skipped) both before and after switching
+to the global virtual store with `--config.enable-global-virtual-store=true`.
+The global-store `node_modules/vitest` symlink resolved into the store's `links`
+directory. `node node_modules/@typescript/native/bin/tsc --noEmit` also passed
+from `packages/kit` under the global store. These focused tests revealed no
+failure; they do not establish that all workspace packages or integrations work.
+A root Vitest run also included build-fixture tests whose generated artifacts
+were absent, so its failures are not evidence of broken registry packages.
