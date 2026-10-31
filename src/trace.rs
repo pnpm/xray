@@ -32,6 +32,12 @@ pub struct TraceResult {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+struct TraceOwner {
+    root: PathBuf,
+    manifest: Manifest,
+    installed: bool,
+}
+
 /// Preserve ordinary exit codes and use the shell convention for Unix signals.
 pub fn status_code(status: ExitStatus) -> u8 {
     if let Some(code) = status.code() {
@@ -61,12 +67,13 @@ pub fn run(command: &[OsString], packages: &[PathBuf], project: &Path) -> Result
         options.push(" ");
     }
     options.push(format!("--import={}", file_url(&hook)?));
-    let mut owners = packages.to_vec();
+    let mut workspaces = Vec::new();
     for workspace in crate::workspace::projects(project)? {
         if workspace.join("package.json").is_file() {
-            owners.push(workspace);
+            workspaces.push(workspace);
         }
     }
+    let owners = trace_owners(packages, &workspaces)?;
     let status = Command::new(program)
         .args(args)
         .current_dir(project)
@@ -117,26 +124,37 @@ fn file_url_for_platform(path: &str, windows: bool) -> Result<String> {
     Ok(url)
 }
 
-fn reports_from_events(
-    raw: &str,
-    packages: &[PathBuf],
-) -> Result<(Vec<PackageReport>, Vec<Diagnostic>)> {
+fn trace_owners(packages: &[PathBuf], workspaces: &[PathBuf]) -> Result<Vec<TraceOwner>> {
     let mut roots = Vec::new();
     for package in packages {
         let path = package.canonicalize()?;
         let installed = path.components().any(|component| component.as_os_str() == "node_modules");
         let manifest = Manifest::read(&path)?;
-        roots.push((path, manifest, installed));
+        roots.push(TraceOwner { root: path, manifest, installed });
     }
-    roots.sort_by_key(|(path, _, _)| std::cmp::Reverse(path.components().count()));
+    for workspace in workspaces {
+        let path = workspace.canonicalize()?;
+        let manifest = Manifest::read(&path)?;
+        roots.retain(|existing| existing.root != path);
+        roots.push(TraceOwner { root: path, manifest, installed: false });
+    }
+    roots.sort_by_key(|owner| std::cmp::Reverse(owner.root.components().count()));
+    Ok(roots)
+}
+
+fn reports_from_events(
+    raw: &str,
+    roots: &[TraceOwner],
+) -> Result<(Vec<PackageReport>, Vec<Diagnostic>)> {
     let mut reports: BTreeMap<String, BTreeMap<String, Finding>> = BTreeMap::new();
     let mut diagnostics = BTreeMap::new();
     for line in raw.lines() {
         let event: Event = serde_json::from_str(line).context("reading Node trace event")?;
         let Ok(parent) = event.parent.canonicalize() else { continue };
-        let Some((root, manifest, installed)) = roots.iter().find(|(path, _, installed)| {
-            parent.strip_prefix(path).is_ok_and(|relative| {
-                *installed || !relative.components().any(|part| part.as_os_str() == "node_modules")
+        let Some(TraceOwner { root, manifest, installed }) = roots.iter().find(|owner| {
+            parent.strip_prefix(&owner.root).is_ok_and(|relative| {
+                owner.installed
+                    || !relative.components().any(|part| part.as_os_str() == "node_modules")
             })
         }) else {
             continue;

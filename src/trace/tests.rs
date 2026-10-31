@@ -1,4 +1,4 @@
-use super::{file_url_for_platform, reports_from_events, run};
+use super::{file_url_for_platform, reports_from_events, run, trace_owners};
 use std::process::Command;
 
 #[test]
@@ -81,7 +81,8 @@ fn diagnoses_declared_dependencies_and_ignores_workspace_imports() {
         serde_json::json!({"specifier":"declared", "parent":installed_file}),
         serde_json::json!({"specifier":"missing", "parent":workspace_file}),
     );
-    let (reports, diagnostics) = reports_from_events(&raw, &[package]).unwrap();
+    let owners = trace_owners(&[package], &[]).unwrap();
+    let (reports, diagnostics) = reports_from_events(&raw, &owners).unwrap();
     assert!(reports.is_empty());
     assert_eq!(diagnostics.len(), 1);
     assert!(diagnostics[0].message.contains("declared"));
@@ -278,9 +279,11 @@ fn diagnoses_workspace_failures_without_proposing_dependency_extensions() {
         return;
     }
     let temp = tempfile::tempdir().unwrap();
-    let workspace = temp.path().join("packages/app");
+    // Explicit workspace membership wins even inside a node_modules directory.
+    let project = temp.path().join("node_modules/workspace-checkout");
+    let workspace = project.join("packages/app");
     std::fs::create_dir_all(&workspace).unwrap();
-    std::fs::write(temp.path().join("pnpm-workspace.yaml"), "packages: ['packages/*']\n").unwrap();
+    std::fs::write(project.join("pnpm-workspace.yaml"), "packages: ['packages/*']\n").unwrap();
     std::fs::write(
         workspace.join("package.json"),
         r#"{"name":"workspace-fixture","version":"1.0.0"}"#,
@@ -292,7 +295,7 @@ fn diagnoses_workspace_failures_without_proposing_dependency_extensions() {
         "try { require('workspace-missing'); } catch {} process.exitCode = 7;\n",
     )
     .unwrap();
-    let observed = run(&["node".into(), script.into_os_string()], &[], temp.path()).unwrap();
+    let observed = run(&["node".into(), script.into_os_string()], &[], &project).unwrap();
     assert_eq!(observed.status.code(), Some(7));
     assert!(observed.reports.is_empty());
     assert_eq!(observed.diagnostics.len(), 1);
@@ -300,4 +303,32 @@ fn diagnoses_workspace_failures_without_proposing_dependency_extensions() {
     assert_eq!(observed.diagnostics[0].file, "index.cjs");
     assert!(observed.diagnostics[0].message.contains("Workspace source"));
     assert!(observed.diagnostics[0].message.contains("workspace-missing"));
+}
+
+#[test]
+fn command_can_remove_a_manifest_without_changing_its_status_or_trace_ownership() {
+    if !Command::new("node")
+        .args([
+            "-e",
+            "process.exit(typeof require('node:module').registerHooks === 'function' ? 0 : 1)",
+        ])
+        .status()
+        .is_ok_and(|status| status.success())
+    {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("package.json"),
+        r#"{"name":"changing-workspace","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    let entry = root.path().join("index.cjs");
+    std::fs::write(&entry, "try { require('workspace-missing'); } catch {} require('node:fs').unlinkSync('package.json'); process.exitCode = 7;\n").unwrap();
+    let observed = run(&["node".into(), entry.into_os_string()], &[], root.path()).unwrap();
+    assert_eq!(observed.status.code(), Some(7));
+    assert!(!root.path().join("package.json").exists());
+    assert!(observed.reports.is_empty());
+    assert_eq!(observed.diagnostics.len(), 1);
+    assert_eq!(observed.diagnostics[0].package, "changing-workspace@1.0.0");
 }
