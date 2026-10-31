@@ -94,7 +94,10 @@ pnpm test
 
 This preserves the original command failure status and links installed providers
 for the observed references; missing optional providers stay unselected. Workspace
-source failures and already-declared dependencies are excluded. Custom loaders or
+source failures are reported as diagnostics so the owning manifest can be corrected;
+they do not generate package extensions. Explicit resolver search paths and
+already-declared dependencies also produce diagnostics instead of caller repairs.
+Custom loaders or
 processes that replace `NODE_OPTIONS` can bypass the hook. Runtime observations
 include a filename and specifier; static findings also have line and column.
 
@@ -116,6 +119,9 @@ public stylesheet subpaths of packages without exports maps; use
 `--fix --all-files` for deep imports outside that graph. A parse failure in that
 surface excludes that entire package from repair and makes xray exit with code 2.
 Independent packages can still be repaired; excluded packages are listed on stderr.
+Static `require.resolve` analysis follows default lookup and the local
+`{ paths: [__dirname] }` form. Foreign or opaque search roots require runtime
+diagnosis because linking a dependency into the caller might not affect that lookup.
 
 The planner reuses installed providers as optional peers, including type providers,
 so a publisher's historical development range does not pull in an incompatible
@@ -173,7 +179,9 @@ This requires a local TypeScript installation and `tsconfig.json` in the target
 project. Xray emits declarations from the shipped JavaScript without executing
 it. For declaration files containing implementation initializers, it can instead
 re-emit the original text as virtual TypeScript source, preserving declaration-only
-types. It checks the existing export contract and verifies the project in memory with
+types. It can also remove a final unresolved bare identifier when TypeScript
+confirms that this statement is invalid and every valid declaration stays unchanged.
+It checks the existing export contract and verifies the project in memory with
 all declaration checking enabled. A candidate is rejected if any diagnostics
 remain; the reason is printed. Source files in the package store are untouched.
 

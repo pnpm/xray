@@ -14,7 +14,7 @@ node corpus/run.mjs /path/to/xray
 
 Broken-package entries record a shipped import and the manifest declaration that
 makes it a candidate for an extension. Clean controls assert zero findings.
-Most entries assert zero diagnostic lines; unenv and is-bun-module have malformed
+Most entries assert zero diagnostic lines; unenv, is-bun-module and v8-compile-cache-lib have malformed
 published declarations and the corpus checks that those diagnostics remain visible. These checks do not certify that
 every finding is actionable or that a suggested version is compatible.
 In particular, Docusaurus uses generated and bundler aliases; treating those as
@@ -57,7 +57,7 @@ cargo build
 node corpus/install-test.mjs
 ```
 
-The integration test covers fifteen known broken releases; it does not establish that
+The integration test covers seventeen known broken releases; it does not establish that
 all generated fixes are safe or that every registry package has been checked.
 
 ## CLI safety checks

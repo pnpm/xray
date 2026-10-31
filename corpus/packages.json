@@ -301,5 +301,33 @@
     ],
     "maxDiagnosticLines": 1,
     "evidence": "The published shared.d.ts includes ambient initializers rejected by TypeScript. The diagnostic is asserted without claiming the archive itself is valid."
+  },
+  {
+    "name": "eslint-plugin-compat",
+    "version": "7.0.2",
+    "url": "https://registry.npmjs.org/eslint-plugin-compat/-/eslint-plugin-compat-7.0.2.tgz",
+    "sha512": "80df2117ee0dcccb0751baf89bf4d864ad05b56dc3715e20f2b5e94ec636115e718910fc8ec8a552507d94d4a41865f4bde0c2c4c84a4966d277e7da241c900c",
+    "expected": [
+      {
+        "dependency": "caniuse-lite",
+        "severity": "undeclared",
+        "origin": "runtime"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The published browser-compatibility provider requires caniuse-lite but the manifest does not declare it. Verified by executing an ESLint compatibility rule."
+  },
+  {
+    "name": "v8-compile-cache-lib",
+    "version": "3.0.1",
+    "url": "https://registry.npmjs.org/v8-compile-cache-lib/-/v8-compile-cache-lib-3.0.1.tgz",
+    "sha512": "c1aed88f25067cd667808fefb4ad141c037e9600c2c413c2ca55571a9d33bb9f45cf96a21ad3576aadc3848a2fd3adcca2b07e55fb9f2e1dc9945d8a7532b7c6",
+    "expected": [],
+    "expectedIncomplete": true,
+    "expectedDiagnostics": [
+      "v8-compile-cache.d.ts"
+    ],
+    "maxDiagnosticLines": 1,
+    "evidence": "The published declaration ends with a stray bare identifier rejected in ambient contexts. Repair must preserve the rest of the declaration."
   }
 ]

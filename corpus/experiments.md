@@ -321,3 +321,56 @@ resolved export flags and rendered value, function, and expanded type-alias
 signatures matched for this package. This is evidence for a package-specific
 candidate, not a proof that declaration text can always be safely re-emitted as
 implementation or that rendered type strings are a complete API equivalence test.
+
+## Rollup plugins workspace
+
+At `rollup/plugins` commit `b09437adcd7010c2a6cd20c778be0e4626f640f3`,
+the checkout selected Node 20.20.2 and pnpm 9.5.0. Its `.npmrc` enables public
+hoisting, so the local strict install explicitly disabled both hoisting settings:
+
+```sh
+CI=true pnpm install --frozen-lockfile --ignore-scripts --hoist=false --shamefully-hoist=false
+```
+
+The installed modules state recorded `hoistedDependencies: {}`. Building
+`packages/commonjs` with its local Rollup binary succeeded. Running the
+package's Vitest configuration directly gave 242 passing tests and one failed
+suite: `packages/commonjs/test/form.js` directly requires `acorn`, which that
+workspace package does not declare. This is a workspace test dependency, not a
+confirmed defect in an npm registry package.
+
+To test the global virtual store, the disposable checkout's root
+`packageManager` was changed to pnpm 12.16.1, and a frozen install used
+`--ignore-scripts --config.hoist=false
+--config.enable-global-virtual-store=true --config.confirm-modules-purge=false`.
+The modules state again recorded no hoisted dependencies, and the Vitest
+symlink resolved into the global store's `links` directory. The same build
+passed and the same CommonJS suite failed on `acorn`. A Node 24 xray trace of
+that focused run preserved the failing exit status and reported unrelated
+optional lookups; the missing `acorn` belonged to workspace test code, which
+was not a candidate for a registry package extension. Adding `acorn@8.8.0` to
+the disposable CommonJS workspace package's dev dependencies and reinstalling
+made all 291 tests pass across four files.
+
+A second focused `packages/node-resolve` build passed under the global store;
+its tests had one failure because the workspace test requested
+`@babel/preset-env` without declaring it. Adding version 7.19.4 to that
+workspace package's dev dependencies made all 137 tests pass across 13 files.
+Both additions were only made in the disposable checkout. The non-frozen
+reinstalls re-resolved portions of the dependency graph, so the passing results
+are useful diagnosis rather than controlled single-variable proofs. No registry
+package repair was confirmed in this experiment, and no workspace changes were
+submitted upstream.
+
+The Rollup workspace's full `--fix --dry-run` also reported an incomplete scan
+for the published `v8-compile-cache-lib@3.0.1` declaration, which ends with a
+stray `x` after its valid exported `install` signature. The same bytes were
+present in the registry tarball, and a separate strict global-store TypeScript
+consumer reproduced TS1036 and TS2304. Version 3.0.0 also contains the stray
+character. Xray's declaration-regeneration dry run did not propose a patch. A
+manually reviewed pnpm patch deleting only the final character preserved the
+remaining declaration text and made that consumer typecheck after a scripts-
+disabled reinstall. This validates that specific human patch, not a general
+rule for automatically deleting malformed declaration text. Tarball:
+`https://registry.npmjs.org/v8-compile-cache-lib/-/v8-compile-cache-lib-3.0.1.tgz`,
+integrity `sha512-wa7YjyUGfNZngI/vtK0UHAN+lgDCxBPCylVXGp0zu59Fz5aiGtNXaq3DhIov063MorB+VfufLh3JlF2KdTK3xg==`.
