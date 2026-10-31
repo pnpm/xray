@@ -160,9 +160,15 @@ jobs:
     - name: Publish the platform packages
       run: |
         for dir in npm/xray.*; do
-          pn publish "$dir" --access public --provenance --no-git-checks --tag "${{ inputs.tag }}"
+          pn publish "$dir" --access public --provenance --no-git-checks --tag "$TAG"
         done
+      env:
+        # Pass the input through the environment rather than splicing it into
+        # the script, so its value cannot inject shell.
+        TAG: ${{ inputs.tag }}
     # The wrapper depends on the platform packages, so publishing it first would
     # leave a version on the registry that resolves to no binary at all.
     - name: Publish the wrapper
-      run: pn publish npm/xray --access public --provenance --no-git-checks --tag "${{ inputs.tag }}"
+      run: pn publish npm/xray --access public --provenance --no-git-checks --tag "$TAG"
+      env:
+        TAG: ${{ inputs.tag }}
