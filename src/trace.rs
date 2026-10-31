@@ -7,12 +7,16 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
+    io::Write as _,
     path::{Path, PathBuf},
-    process::ExitStatus,
-    sync::atomic::AtomicBool,
+    process::{Command, ExitStatus},
+    sync::atomic::{AtomicBool, Ordering},
+    thread,
+    time::{Duration, Instant},
 };
 
 #[derive(Deserialize)]
@@ -54,38 +58,67 @@ pub fn status_code(status: ExitStatus) -> u8 {
     1
 }
 
-/// Run a command with the Node preload active. Its streams and exit status are
-/// unchanged. Every captured resolution failure may have been caught by code.
-pub fn run(command: &[OsString], packages: &[PathBuf], project: &Path) -> Result<TraceResult> {
-    run_inner(command, packages, project, None)
+/// The command's own status, or the shell's interrupt code when xray was
+/// interrupted and the command still reported success.
+pub fn exit_code(status: ExitStatus, interrupted: bool) -> u8 {
+    if interrupted && status.success() {
+        130
+    } else {
+        status_code(status)
+    }
 }
 
+/// Run a command with the Node preload active. Its streams and exit status are
+/// unchanged. Every captured resolution failure may have been caught by code.
+#[cfg(test)]
+pub fn run(command: &[OsString], packages: &[PathBuf], project: &Path) -> Result<TraceResult> {
+    run_interactive(command, packages, project, &AtomicBool::new(false))
+}
+
+/// Run a command in the foreground for plain `--trace`. The terminal delivers
+/// Ctrl-C to the command as well, so on `cancelled` it is given time to shut
+/// down on its own before it is killed, and the observations made until then
+/// are still returned.
+pub fn run_interactive(
+    command: &[OsString],
+    packages: &[PathBuf],
+    project: &Path,
+    cancelled: &AtomicBool,
+) -> Result<TraceResult> {
+    run_inner(command, packages, project, Wait::Foreground(cancelled))
+}
+
+/// Run a command in its own process group, killed as soon as `cancelled` is set.
 pub fn run_cancellable(
     command: &[OsString],
     packages: &[PathBuf],
     project: &Path,
     cancelled: &AtomicBool,
 ) -> Result<TraceResult> {
-    run_inner(command, packages, project, Some(cancelled))
+    run_inner(command, packages, project, Wait::Group(cancelled))
 }
+
+#[derive(Clone, Copy)]
+enum Wait<'a> {
+    Foreground(&'a AtomicBool),
+    Group(&'a AtomicBool),
+}
+
+/// How long an interrupted foreground command may take to exit by itself.
+const INTERRUPT_GRACE: Duration = Duration::from_secs(10);
 
 fn run_inner(
     command: &[OsString],
     packages: &[PathBuf],
     project: &Path,
-    cancelled: Option<&AtomicBool>,
+    wait: Wait<'_>,
 ) -> Result<TraceResult> {
     let (program, args) = command.split_first().context("--trace needs a command after --")?;
     let temp = tempfile::tempdir().context("creating trace directory")?;
-    let hook = temp.path().join("hook.mjs");
+    let hook = install_hook()?;
     let events = temp.path().join("events.jsonl");
-    std::fs::write(&hook, include_str!("trace-hook.mjs"))?;
     std::fs::write(&events, "")?;
-    let mut options = std::env::var_os("NODE_OPTIONS").unwrap_or_default();
-    if !options.is_empty() {
-        options.push(" ");
-    }
-    options.push(format!("--import={}", file_url(&hook)?));
+    let options = node_options(std::env::var_os("NODE_OPTIONS"), &file_url(&hook)?);
     let mut workspaces = Vec::new();
     for workspace in crate::workspace::projects(project)? {
         if workspace.join("package.json").is_file() {
@@ -99,13 +132,102 @@ fn run_inner(
         .current_dir(project)
         .env("NODE_OPTIONS", options)
         .env("XRAY_TRACE_FILE", &events);
-    let status = if let Some(flag) = cancelled {
-        crate::verify_signals::run(&mut child, flag)?
-    } else {
-        child.status().context("starting traced command")?
+    let status = match wait {
+        Wait::Group(flag) => crate::verify_signals::run(&mut child, flag)?,
+        Wait::Foreground(flag) => wait_foreground(&mut child, flag, INTERRUPT_GRACE)?,
     };
-    let (reports, diagnostics) = reports_from_events(&std::fs::read_to_string(events)?, &owners)?;
-    Ok(TraceResult { status, reports, diagnostics })
+    let observations = reports_from_events(&std::fs::read(events)?, &owners);
+    if observations.skipped > 0 {
+        eprintln!(
+            "xray: skipped {} unreadable trace events; observations may be incomplete.",
+            observations.skipped,
+        );
+    }
+    Ok(TraceResult { status, reports: observations.reports, diagnostics: observations.diagnostics })
+}
+
+/// Keep the caller's Node options and add the preload after them.
+fn node_options(existing: Option<OsString>, hook: &str) -> OsString {
+    let mut options = existing.unwrap_or_default();
+    if !options.is_empty() {
+        options.push(" ");
+    }
+    options.push(format!("--import={hook}"));
+    options
+}
+
+fn wait_foreground(
+    command: &mut Command,
+    cancelled: &AtomicBool,
+    grace: Duration,
+) -> Result<ExitStatus> {
+    let mut child = command.spawn().context("starting traced command")?;
+    let mut deadline = None;
+    loop {
+        if let Some(status) = child.try_wait().context("waiting for traced command")? {
+            return Ok(status);
+        }
+        if cancelled.load(Ordering::SeqCst) {
+            let deadline = *deadline.get_or_insert_with(|| Instant::now() + grace);
+            if Instant::now() >= deadline {
+                // The command may exit concurrently. Always reap it.
+                if let Err(error) = child.kill() {
+                    if child.try_wait()?.is_none() {
+                        return Err(error).context("stopping traced command");
+                    }
+                }
+                return child.wait().context("reaping traced command");
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// Write the preload to a content-addressed path that is never removed. Node
+/// processes that outlive the trace, such as build daemons, keep the inherited
+/// `NODE_OPTIONS`, and every Node process they start must still find the hook.
+fn install_hook() -> Result<PathBuf> {
+    install_hook_in(&cache_directory().join("xray"))
+}
+
+fn install_hook_in(directory: &Path) -> Result<PathBuf> {
+    use std::fmt::Write as _;
+    const HOOK: &str = include_str!("trace-hook.mjs");
+    let digest = Sha256::digest(HOOK.as_bytes());
+    let name = digest.iter().take(8).fold(String::new(), |mut name, byte| {
+        let _ = write!(name, "{byte:02x}");
+        name
+    });
+    std::fs::create_dir_all(directory)
+        .with_context(|| format!("creating {}", directory.display()))?;
+    let hook = directory.join(format!("trace-hook-{name}.mjs"));
+    if std::fs::read_to_string(&hook).is_ok_and(|current| current == HOOK) {
+        return Ok(hook);
+    }
+    let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
+    temporary.write_all(HOOK.as_bytes())?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(&hook).with_context(|| format!("writing {}", hook.display()))?;
+    Ok(hook)
+}
+
+fn cache_directory() -> PathBuf {
+    let from_env =
+        |name: &str| std::env::var_os(name).map(PathBuf::from).filter(|path| path.is_absolute());
+    if cfg!(windows) {
+        if let Some(local) = from_env("LOCALAPPDATA") {
+            return local;
+        }
+    } else if let Some(cache) = from_env("XDG_CACHE_HOME") {
+        return cache;
+    } else if let Some(home) = from_env("HOME") {
+        return if cfg!(target_os = "macos") {
+            home.join("Library/Caches")
+        } else {
+            home.join(".cache")
+        };
+    }
+    std::env::temp_dir()
 }
 
 // Escape spaces and non-ASCII bytes so NODE_OPTIONS doesn't split the URL.
@@ -165,14 +287,26 @@ fn trace_owners(packages: &[PathBuf], workspaces: &[PathBuf]) -> Result<Vec<Trac
     Ok(roots)
 }
 
-fn reports_from_events(
-    raw: &str,
-    roots: &[TraceOwner],
-) -> Result<(Vec<PackageReport>, Vec<Diagnostic>)> {
+struct Observations {
+    reports: Vec<PackageReport>,
+    diagnostics: Vec<Diagnostic>,
+    /// Lines that were not a well-formed UTF-8 JSON event, for example one cut
+    /// short by a killed process or holding an unpaired surrogate escape.
+    skipped: usize,
+}
+
+fn reports_from_events(raw: &[u8], roots: &[TraceOwner]) -> Observations {
     let mut reports: BTreeMap<String, BTreeMap<String, Finding>> = BTreeMap::new();
     let mut diagnostics = BTreeMap::new();
-    for line in raw.lines() {
-        let event: Event = serde_json::from_str(line).context("reading Node trace event")?;
+    let mut skipped = 0;
+    for line in raw.split(|byte| *byte == b'\n') {
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        let Ok(event) = serde_json::from_slice::<Event>(line) else {
+            skipped += 1;
+            continue;
+        };
         let Ok(parent) = event.parent.canonicalize() else { continue };
         let Some(TraceOwner { root, manifest, installed }) = roots.iter().find(|owner| {
             parent.strip_prefix(&owner.root).is_ok_and(|relative| {
@@ -247,7 +381,7 @@ fn reports_from_events(
             findings: findings.into_values().collect(),
         })
         .collect();
-    Ok((reports, diagnostics.into_values().collect()))
+    Observations { reports, diagnostics: diagnostics.into_values().collect(), skipped }
 }
 
 #[cfg(test)]

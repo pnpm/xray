@@ -1,7 +1,7 @@
 // Preloaded into Node processes spawned by xray. Resolution failures can be
 // caught by the application, so these are observations, not proven breakages.
 import * as nodeModule from 'node:module';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 let customResolutions = 0;
@@ -13,7 +13,11 @@ function record(specifier, parent, error, customResolution) {
     const identity = JSON.stringify([specifier, parent, customResolution]);
     if (recorded.get(error)?.has(identity) ||
         (!customResolution && recorded.get(error)?.has(JSON.stringify([specifier, parent, true])))) return;
-    appendFileSync(process.env.XRAY_TRACE_FILE, JSON.stringify({ specifier, parent, code: error.code,
+    // A process that outlives the trace, such as a build daemon, still carries
+    // the preload. Once xray has removed the event file, record nothing.
+    const file = process.env.XRAY_TRACE_FILE;
+    if (!file || !existsSync(file)) return;
+    appendFileSync(file, JSON.stringify({ specifier, parent, code: error.code,
       message: String(error.message), customResolution }) + '\n');
     if (!recorded.has(error)) recorded.set(error, new Set());
     recorded.get(error).add(identity);
@@ -22,7 +26,9 @@ function record(specifier, parent, error, customResolution) {
   }
 }
 if (typeof nodeModule.registerHooks !== 'function') {
-  console.error('xray: runtime tracing requires Node.js 22.15 or newer');
+  if (process.env.XRAY_TRACE_FILE && existsSync(process.env.XRAY_TRACE_FILE)) {
+    console.error('xray: runtime tracing requires Node.js 22.15 or newer');
+  }
 } else {
 // The public resolution hook omits require.resolve's options. Mark explicit
 // options before Node enters the hook so a foreign search path is never

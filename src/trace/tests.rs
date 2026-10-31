@@ -82,7 +82,8 @@ fn diagnoses_declared_dependencies_and_ignores_workspace_imports() {
         serde_json::json!({"specifier":"missing", "parent":workspace_file}),
     );
     let owners = trace_owners(&[package], &[]).unwrap();
-    let (reports, diagnostics) = reports_from_events(&raw, &owners).unwrap();
+    let observed = reports_from_events(raw.as_bytes(), &owners);
+    let (reports, diagnostics) = (observed.reports, observed.diagnostics);
     assert!(reports.is_empty());
     assert_eq!(diagnostics.len(), 1);
     assert!(diagnostics[0].message.contains("declared"));
@@ -331,4 +332,98 @@ fn command_can_remove_a_manifest_without_changing_its_status_or_trace_ownership(
     assert!(observed.reports.is_empty());
     assert_eq!(observed.diagnostics.len(), 1);
     assert_eq!(observed.diagnostics[0].package, "changing-workspace@1.0.0");
+}
+
+fn node_supports_hooks() -> bool {
+    Command::new("node")
+        .args([
+            "-e",
+            "process.exit(typeof require('node:module').registerHooks === 'function' ? 0 : 1)",
+        ])
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[test]
+fn skips_unreadable_events_and_keeps_the_rest() {
+    let temp = tempfile::tempdir().unwrap();
+    let package = temp.path().join("node_modules/example");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("package.json"), r#"{"name":"example","version":"1.0.0"}"#)
+        .unwrap();
+    let file = package.join("index.js");
+    std::fs::write(&file, "").unwrap();
+    let mut raw = br#"{"specifier":"\ud800","parent":"/x"}"#.to_vec();
+    raw.extend_from_slice(b"\n{\"specifier\":\"cut sh\n\xff\xfe\n\n");
+    raw.extend_from_slice(
+        format!("{}\n", serde_json::json!({"specifier":"missing", "parent":file})).as_bytes(),
+    );
+    let owners = trace_owners(&[package], &[]).unwrap();
+    let observed = reports_from_events(&raw, &owners);
+    assert_eq!(observed.skipped, 3);
+    assert_eq!(observed.reports.len(), 1);
+    assert_eq!(observed.reports[0].findings[0].dependency, "missing");
+}
+
+#[test]
+fn hook_lives_at_a_stable_path_that_outlives_the_trace() {
+    let cache = tempfile::tempdir().unwrap();
+    let first = super::install_hook_in(cache.path()).unwrap();
+    let second = super::install_hook_in(cache.path()).unwrap();
+    assert_eq!(first, second);
+    assert_eq!(std::fs::read_to_string(&first).unwrap(), include_str!("../trace-hook.mjs"));
+    std::fs::write(&first, "tampered").unwrap();
+    assert_eq!(super::install_hook_in(cache.path()).unwrap(), first);
+    assert_eq!(std::fs::read_to_string(&first).unwrap(), include_str!("../trace-hook.mjs"));
+}
+
+#[test]
+fn lingering_processes_ignore_a_removed_event_file() {
+    if !node_supports_hooks() {
+        return;
+    }
+    let cache = tempfile::tempdir().unwrap();
+    let hook = super::install_hook_in(cache.path()).unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let events = project.path().join("gone/events.jsonl");
+    let gone = project.path().join("events.jsonl");
+    for file in [&events, &gone] {
+        let output = Command::new("node")
+            .args(["-e", "try { require('missing-' + 'dep') } catch {}"])
+            .env("NODE_OPTIONS", format!("--import={}", super::file_url(&hook).unwrap()))
+            .env("XRAY_TRACE_FILE", file)
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(!file.exists());
+    }
+}
+
+#[test]
+fn preserves_existing_node_options() {
+    assert_eq!(super::node_options(None, "file:///hook.mjs"), "--import=file:///hook.mjs");
+    assert_eq!(
+        super::node_options(Some("--max-old-space-size=4096".into()), "file:///hook.mjs"),
+        "--max-old-space-size=4096 --import=file:///hook.mjs",
+    );
+}
+
+#[test]
+fn interrupted_foreground_command_may_finish_or_is_killed_after_the_grace_period() {
+    use std::{sync::atomic::AtomicBool, time::Duration};
+    let cancelled = AtomicBool::new(true);
+    let mut quick = Command::new("node");
+    quick.args(["-e", ""]);
+    let status = super::wait_foreground(&mut quick, &cancelled, Duration::from_secs(30)).unwrap();
+    assert!(status.success());
+    assert_eq!(super::exit_code(status, true), 130);
+    assert_eq!(super::exit_code(status, false), 0);
+    let mut stuck = Command::new("node");
+    stuck.args(["-e", "setTimeout(() => {}, 60000)"]);
+    let started = std::time::Instant::now();
+    let status = super::wait_foreground(&mut stuck, &cancelled, Duration::ZERO).unwrap();
+    assert!(!status.success());
+    assert!(started.elapsed() < Duration::from_secs(30));
 }

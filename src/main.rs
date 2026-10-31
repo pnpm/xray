@@ -298,7 +298,13 @@ fn write_repairs(
 }
 
 fn run_trace(args: &Args, workspace: &Path, providers: &[PathBuf]) -> Result<ExitCode> {
-    let observed = trace::run(&args.command, providers, &args.path)?;
+    // Ctrl-C reaches the command too; keep xray alive to report what it saw.
+    let signals = verify_signals::SignalGuard::install()?;
+    let observed = trace::run_interactive(&args.command, providers, &args.path, signals.flag())?;
+    let interrupted = signals.flag().load(std::sync::atomic::Ordering::SeqCst);
+    if interrupted {
+        eprintln!("Interrupted; reporting the resolutions observed so far.");
+    }
     if !observed.reports.is_empty() {
         eprintln!("Observed failed Node resolutions; optional imports may have been caught:");
         eprint!("{}", report::as_text(&observed.reports));
@@ -314,5 +320,5 @@ fn run_trace(args: &Args, workspace: &Path, providers: &[PathBuf]) -> Result<Exi
         configuration::apply(workspace, &mut reports)?;
         write_repairs(args, workspace, &reports, providers)?;
     }
-    Ok(ExitCode::from(trace::status_code(observed.status)))
+    Ok(ExitCode::from(trace::exit_code(observed.status, interrupted)))
 }
