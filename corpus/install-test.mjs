@@ -8,13 +8,13 @@ import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { minimumReleaseAge } from './registry-cutoff.mjs'
+import { auditedDependencies, registryWindow, remainingTime } from './registry-cutoff.mjs'
 
 const binary = resolve(process.argv[2] ?? fileURLToPath(new URL('../target/debug/xray', import.meta.url)))
 const temp = await mkdtemp(join(tmpdir(), 'xray-install-'))
-const releaseAge = minimumReleaseAge()
+const { deadline: registryDeadline, releaseAge } = registryWindow()
 function run(command, args, cwd) {
-  const result = spawnSync(command, args, { cwd, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024, timeout: 180_000 })
+  const result = spawnSync(command, args, { cwd, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024, timeout: remainingTime(registryDeadline, 180_000) })
   if (result.error) throw result.error
   return result
 }
@@ -60,7 +60,7 @@ try {
     const settings = `# corpus settings comment\npackages:\n  - packages/*\nhoist: false\nminimumReleaseAge: ${releaseAge}\nenableGlobalVirtualStore: ${globalStore}\nstoreDir: ${join(temp, 'store')}\n`
     const workspace = join(root, 'pnpm-workspace.yaml')
     await writeFile(workspace, settings)
-    await writeFile(join(app, 'package.json'), JSON.stringify({ name: 'xray-corpus-consumer', private: true, type: 'module', dependencies: { '@medplum/core': '5.2.13', '@types/node': '22.19.15', typescript: '5.9.3' } }))
+    await writeFile(join(app, 'package.json'), JSON.stringify({ name: 'xray-corpus-consumer', private: true, type: 'module', dependencies: auditedDependencies({ '@medplum/core': '5.2.13', '@types/node': '22.19.15', typescript: '5.9.3' }) }))
     await writeFile(join(app, 'index.ts'), "import type { MedplumClient } from '@medplum/core';\nexport type Client = MedplumClient;\n")
     // This unrelated optional peer is not the issue under test.
     await writeFile(join(app, 'types.d.ts'), "declare module 'pdfmake/interfaces' { export type TDocumentDefinitions = any; export type TFontDictionary = any; export type CustomTableLayout = any; }\n")
@@ -92,7 +92,7 @@ try {
     await mkdir(runtimeApp, { recursive: true })
     const runtimeWorkspace = join(runtimeRoot, 'pnpm-workspace.yaml')
     await writeFile(runtimeWorkspace, settings)
-    await writeFile(join(runtimeApp, 'package.json'), JSON.stringify({ name: 'xray-runtime-consumer', private: true, dependencies: { '@vue/consolidate': '1.0.0', pug: '3.0.3' } }))
+    await writeFile(join(runtimeApp, 'package.json'), JSON.stringify({ name: 'xray-runtime-consumer', private: true, dependencies: auditedDependencies({ '@vue/consolidate': '1.0.0', pug: '3.0.3' }) }))
     await writeFile(join(runtimeApp, 'render.cjs'), `require('@vue/consolidate').pug.render('p hello', {}, (err, html) => {
   if (err) { console.error(err); process.exitCode = 1; return }
   if (html.trim() !== '<p>hello</p>') { console.error(html); process.exitCode = 1 }
@@ -136,7 +136,7 @@ try {
     await mkdir(volarApp, { recursive: true })
     const volarWorkspace = join(volarRoot, 'pnpm-workspace.yaml')
     await writeFile(volarWorkspace, settings)
-    await writeFile(join(volarApp, 'package.json'), JSON.stringify({ name: 'xray-volar-consumer', private: true, dependencies: { '@volar/typescript': '2.4.28', typescript: '5.9.3' } }))
+    await writeFile(join(volarApp, 'package.json'), JSON.stringify({ name: 'xray-volar-consumer', private: true, dependencies: auditedDependencies({ '@volar/typescript': '2.4.28', typescript: '5.9.3' }) }))
     await writeFile(join(volarApp, 'index.ts'), "import * as volar from '@volar/typescript';\nconsole.log(volar);\n")
     await writeFile(join(volarApp, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'es2022', module: 'nodenext', moduleResolution: 'nodenext', noEmit: true }, include: ['index.ts'] }))
     checked('pnpm', ['install', '--ignore-scripts'], volarRoot)
@@ -158,7 +158,7 @@ try {
     const jssWorkspace = join(jssRoot, 'pnpm-workspace.yaml')
     const jssSettings = `${settings}ignoreCompatibilityDb: true\n`
     await writeFile(jssWorkspace, jssSettings)
-    await writeFile(join(jssApp, 'package.json'), JSON.stringify({ name: 'xray-jss-consumer', private: true, dependencies: { 'jss-plugin-rule-value-function': '10.1.1', 'tiny-warning': '1.0.3' } }))
+    await writeFile(join(jssApp, 'package.json'), JSON.stringify({ name: 'xray-jss-consumer', private: true, dependencies: auditedDependencies({ 'jss-plugin-rule-value-function': '10.1.1', 'tiny-warning': '1.0.3' }) }))
     await writeFile(join(jssApp, 'load.cjs'), "if (typeof require('jss-plugin-rule-value-function').default !== 'function') throw Error('invalid plugin');\n")
     checked('pnpm', ['install', '--ignore-scripts'], jssRoot)
     const jss = join(jssApp, 'node_modules/jss-plugin-rule-value-function')
@@ -176,7 +176,7 @@ try {
     const rollupApp = join(rollupRoot, 'packages/app')
     await mkdir(rollupApp, { recursive: true })
     await writeFile(join(rollupRoot, 'pnpm-workspace.yaml'), settings)
-    await writeFile(join(rollupApp, 'package.json'), JSON.stringify({ name: 'xray-rollup-consumer', private: true, dependencies: { '@rollup/plugin-dynamic-import-vars': '2.1.4', '@types/estree': '1.0.8', rollup: '4.64.9', typescript: '5.9.3' } }))
+    await writeFile(join(rollupApp, 'package.json'), JSON.stringify({ name: 'xray-rollup-consumer', private: true, dependencies: auditedDependencies({ '@rollup/plugin-dynamic-import-vars': '2.1.4', '@types/estree': '1.0.8', rollup: '4.64.9', typescript: '5.9.3' }) }))
     await writeFile(join(rollupApp, 'index.ts'), "import dynamicImportVars from '@rollup/plugin-dynamic-import-vars';\nconsole.log(dynamicImportVars);\n")
     await writeFile(join(rollupApp, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'esnext', module: 'nodenext', moduleResolution: 'nodenext', types: [], noEmit: true }, include: ['index.ts'] }))
     checked('pnpm', ['install', '--ignore-scripts'], rollupRoot)
@@ -195,7 +195,7 @@ try {
     const cssApp = join(cssRoot, 'packages/app')
     await mkdir(cssApp, { recursive: true })
     await writeFile(join(cssRoot, 'pnpm-workspace.yaml'), settings)
-    await writeFile(join(cssApp, 'package.json'), JSON.stringify({ name: 'xray-css-consumer', private: true, type: 'module', dependencies: { '@material/button': '14.0.0', '@material/base': '14.0.0', '@material/animation': '14.0.0', sass: '1.94.0', vite: '7.2.2' } }))
+    await writeFile(join(cssApp, 'package.json'), JSON.stringify({ name: 'xray-css-consumer', private: true, type: 'module', dependencies: auditedDependencies({ '@material/button': '14.0.0', '@material/base': '14.0.0', '@material/animation': '14.0.0', sass: '1.94.0', vite: '7.2.2' }) }))
     await writeFile(join(cssApp, 'index.html'), '<html><head></head><body><script type="module" src="/main.js"></script></body></html>\n')
     await writeFile(join(cssApp, 'main.js'), "import './style.scss';\n")
     await writeFile(join(cssApp, 'style.scss'), '@use "@material/button/mdc-button.import.scss";\n')
@@ -215,7 +215,7 @@ try {
     const typedApp = join(typedRoot, 'packages/app')
     await mkdir(typedApp, { recursive: true })
     await writeFile(join(typedRoot, 'pnpm-workspace.yaml'), settings)
-    await writeFile(join(typedApp, 'package.json'), JSON.stringify({ name: 'xray-typed-consumer', private: true, dependencies: { 'typed-array-byte-length': '1.0.3', 'available-typed-arrays': '1.0.7' } }))
+    await writeFile(join(typedApp, 'package.json'), JSON.stringify({ name: 'xray-typed-consumer', private: true, dependencies: auditedDependencies({ 'typed-array-byte-length': '1.0.3', 'available-typed-arrays': '1.0.7' }) }))
     await writeFile(join(typedApp, 'load.cjs'), "const length = require('typed-array-byte-length'); if (length(new Uint16Array(3)) !== 6) throw Error('wrong byte length');\n")
     checked('pnpm', ['install', '--ignore-scripts'], typedRoot)
     const beforeTyped = run(process.execPath, ['load.cjs'], typedApp)
@@ -230,7 +230,7 @@ try {
     const firebaseApp = join(firebaseRoot, 'packages/app')
     await mkdir(firebaseApp, { recursive: true })
     await writeFile(join(firebaseRoot, 'pnpm-workspace.yaml'), settings)
-    await writeFile(join(firebaseApp, 'package.json'), JSON.stringify({ name: 'xray-firebase-consumer', private: true, dependencies: { '@firebase/analytics-types': '0.8.5', '@firebase/app-types': '0.9.6', typescript: '5.9.3' } }))
+    await writeFile(join(firebaseApp, 'package.json'), JSON.stringify({ name: 'xray-firebase-consumer', private: true, dependencies: auditedDependencies({ '@firebase/analytics-types': '0.8.5', '@firebase/app-types': '0.9.6', typescript: '5.9.3' }) }))
     await writeFile(join(firebaseApp, 'index.ts'), "import type { FirebaseAnalytics } from '@firebase/analytics-types'; export type Analytics = FirebaseAnalytics;\n")
     await writeFile(join(firebaseApp, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'es2022', module: 'nodenext', moduleResolution: 'nodenext', types: [], noEmit: true }, include: ['index.ts'] }))
     checked('pnpm', ['install', '--ignore-scripts'], firebaseRoot)
@@ -247,7 +247,7 @@ try {
     const eslintApp = join(eslintRoot, 'packages/app')
     await mkdir(eslintApp, { recursive: true })
     await writeFile(join(eslintRoot, 'pnpm-workspace.yaml'), settings)
-    await writeFile(join(eslintApp, 'package.json'), JSON.stringify({ name: 'xray-eslint-consumer', private: true, dependencies: { '@eslint-community/eslint-utils': '4.10.1', '@types/estree': '1.0.10', typescript: '5.9.3', '@types/node': '22.14.1' } }))
+    await writeFile(join(eslintApp, 'package.json'), JSON.stringify({ name: 'xray-eslint-consumer', private: true, dependencies: auditedDependencies({ '@eslint-community/eslint-utils': '4.10.1', '@types/estree': '1.0.10', typescript: '5.9.3', '@types/node': '22.14.1' }) }))
     await writeFile(join(eslintApp, 'index.ts'), "import * as target from '@eslint-community/eslint-utils'; void target;\n")
     await writeFile(join(eslintApp, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'es2022', module: 'nodenext', moduleResolution: 'nodenext', noEmit: true }, include: ['index.ts'] }))
     checked('pnpm', ['install', '--ignore-scripts'], eslintRoot)
@@ -265,7 +265,7 @@ try {
     const humanfsApp = join(humanfsRoot, 'packages/app')
     await mkdir(humanfsApp, { recursive: true })
     await writeFile(join(humanfsRoot, 'pnpm-workspace.yaml'), settings)
-    await writeFile(join(humanfsApp, 'package.json'), JSON.stringify({ name: 'xray-humanfs-consumer', private: true, type: 'module', dependencies: { '@humanfs/node': '0.16.6', '@humanfs/types': '0.15.0', typescript: '5.9.3', '@types/node': '22.14.1' } }))
+    await writeFile(join(humanfsApp, 'package.json'), JSON.stringify({ name: 'xray-humanfs-consumer', private: true, type: 'module', dependencies: auditedDependencies({ '@humanfs/node': '0.16.6', '@humanfs/types': '0.15.0', typescript: '5.9.3', '@types/node': '22.14.1' }) }))
     await writeFile(join(humanfsApp, 'index.ts'), "import * as target from '@humanfs/node'; void target;\n")
     await writeFile(join(humanfsApp, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'es2022', module: 'nodenext', moduleResolution: 'nodenext', noEmit: true }, include: ['index.ts'] }))
     checked('pnpm', ['install', '--ignore-scripts'], humanfsRoot)
@@ -283,7 +283,7 @@ try {
     const dddApp = join(dddRoot, 'packages/app')
     await mkdir(dddApp, { recursive: true })
     await writeFile(join(dddRoot, 'pnpm-workspace.yaml'), settings)
-    await writeFile(join(dddApp, 'package.json'), JSON.stringify({ name: 'xray-ddd-consumer', private: true, dependencies: { '@globalart/ddd': '4.3.0', 'date-fns': '4.4.0' } }))
+    await writeFile(join(dddApp, 'package.json'), JSON.stringify({ name: 'xray-ddd-consumer', private: true, dependencies: auditedDependencies({ '@globalart/ddd': '4.3.0', 'date-fns': '4.4.0' }) }))
     await writeFile(join(dddApp, 'load.cjs'), "const ddd = require('@globalart/ddd'); if (!ddd || typeof ddd !== 'object') throw Error('invalid exports');\n")
     checked('pnpm', ['install', '--ignore-scripts'], dddRoot)
     const beforeDdd = run(process.execPath, ['load.cjs'], dddApp)
@@ -298,7 +298,7 @@ try {
     const nextApp = join(nextRoot, 'packages/app')
     await mkdir(nextApp, { recursive: true })
     await writeFile(join(nextRoot, 'pnpm-workspace.yaml'), settings)
-    await writeFile(join(nextApp, 'package.json'), JSON.stringify({ name: 'xray-next-consumer', private: true, dependencies: { 'eslint-config-next': '16.4.3', 'next': '16.4.3' } }))
+    await writeFile(join(nextApp, 'package.json'), JSON.stringify({ name: 'xray-next-consumer', private: true, dependencies: auditedDependencies({ 'eslint-config-next': '16.4.3', 'next': '16.4.3' }) }))
     await writeFile(join(nextApp, 'load.cjs'), "const parser = require('eslint-config-next/parser'); if (typeof parser.parseForESLint !== 'function') throw Error('invalid parser');\n")
     checked('pnpm', ['install', '--ignore-scripts'], nextRoot)
     const nextLocation = await realpath(join(nextApp, 'node_modules/eslint-config-next'))
@@ -326,7 +326,7 @@ try {
     const compatApp = join(compatRoot, 'packages/app')
     await mkdir(compatApp, { recursive: true })
     await writeFile(join(compatRoot, 'pnpm-workspace.yaml'), settings)
-    await writeFile(join(compatApp, 'package.json'), JSON.stringify({ name: 'xray-compat-consumer', private: true, dependencies: { 'eslint-plugin-compat': '7.0.2', 'caniuse-lite': '1.0.30001820', eslint: '9.39.5' } }))
+    await writeFile(join(compatApp, 'package.json'), JSON.stringify({ name: 'xray-compat-consumer', private: true, dependencies: auditedDependencies({ 'eslint-plugin-compat': '7.0.2', 'caniuse-lite': '1.0.30001820', eslint: '9.39.5' }) }))
     await writeFile(join(compatApp, 'load.cjs'), "const { ESLint } = require('eslint'); const plugin = require('eslint-plugin-compat'); const eslint = new ESLint({ overrideConfigFile: true, overrideConfig: [{ plugins: { compat: plugin }, rules: { 'compat/compat': 'error' } }] }); eslint.lintText('fetch(\"/test\");').then((results) => { if (!results[0].messages.length) throw Error('expected compatibility finding'); }).catch((error) => { console.error(error); process.exitCode = 1; });\n")
     await writeFile(join(compatApp, '.browserslistrc'), 'ie 11\n')
     checked('pnpm', ['install', '--ignore-scripts'], compatRoot)
@@ -342,7 +342,7 @@ try {
     const browserApp = join(browserRoot, 'packages/app')
     await mkdir(browserApp, { recursive: true })
     await writeFile(join(browserRoot, 'pnpm-workspace.yaml'), settings)
-    await writeFile(join(browserApp, 'package.json'), JSON.stringify({ name: 'xray-browser-consumer', private: true, type: 'module', dependencies: { coinstring: '2.0.0', 'crypto-browserify': '2.1.8', esbuild: '0.25.12' } }))
+    await writeFile(join(browserApp, 'package.json'), JSON.stringify({ name: 'xray-browser-consumer', private: true, type: 'module', dependencies: auditedDependencies({ coinstring: '2.0.0', 'crypto-browserify': '2.1.8', esbuild: '0.25.12' }) }))
     await writeFile(join(browserApp, 'index.js'), "import coinstring from 'coinstring'; console.log(coinstring);\n")
     checked('pnpm', ['install', '--ignore-scripts'], browserRoot)
     const esbuild = join(browserApp, 'node_modules/.bin/esbuild')
@@ -361,7 +361,7 @@ try {
       const bunWorkspace = join(bunRoot, 'pnpm-workspace.yaml')
       const bunSettings = `${settings}packageExtensions:\n  'undici-types@*':\n    peerDependencies:\n      '@types/node': '*'\n    peerDependenciesMeta:\n      '@types/node':\n        optional: true\n`
       await writeFile(bunWorkspace, bunSettings)
-      await writeFile(join(bunRoot, 'package.json'), JSON.stringify({ name: 'xray-isbun-consumer', private: true, type: 'module', dependencies: { 'is-bun-module': '2.0.0', typescript: '5.9.3', '@types/node': '22.14.1' } }))
+      await writeFile(join(bunRoot, 'package.json'), JSON.stringify({ name: 'xray-isbun-consumer', private: true, type: 'module', dependencies: auditedDependencies({ 'is-bun-module': '2.0.0', typescript: '5.9.3', '@types/node': '22.14.1' }) }))
       await writeFile(join(bunRoot, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'esnext', module: 'nodenext', moduleResolution: 'nodenext', noEmit: true }, include: ['index.ts'] }))
       await writeFile(join(bunRoot, 'index.ts'), "import { isBunModule, type BunVersion } from 'is-bun-module';\nconst good: BunVersion = '1.2.3';\n// @ts-expect-error malformed Bun versions are rejected\nconst bad: BunVersion = 'bad';\nconst result: boolean = isBunModule('bun', good);\nconsole.log(result, bad);\n")
       checked('pnpm', ['install', '--ignore-scripts'], bunRoot)
@@ -399,7 +399,7 @@ try {
       const v8Workspace = join(v8Root, 'pnpm-workspace.yaml')
       const v8Settings = `${settings}packageExtensions:\n  'undici-types@*':\n    peerDependencies:\n      '@types/node': '*'\n    peerDependenciesMeta:\n      '@types/node':\n        optional: true\n`
       await writeFile(v8Workspace, v8Settings)
-      await writeFile(join(v8Root, 'package.json'), JSON.stringify({ name: 'xray-v8-consumer', private: true, type: 'module', dependencies: { 'v8-compile-cache-lib': '3.0.1', typescript: '5.9.3', '@types/node': '22.14.1' } }))
+      await writeFile(join(v8Root, 'package.json'), JSON.stringify({ name: 'xray-v8-consumer', private: true, type: 'module', dependencies: auditedDependencies({ 'v8-compile-cache-lib': '3.0.1', typescript: '5.9.3', '@types/node': '22.14.1' }) }))
       await writeFile(join(v8Root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'esnext', module: 'nodenext', moduleResolution: 'nodenext', noEmit: true }, include: ['index.ts'] }))
       await writeFile(join(v8Root, 'index.ts'), "import { install } from 'v8-compile-cache-lib';\nconst result = install({ cacheDir: '/tmp/example' });\nresult?.uninstall();\n")
       checked('pnpm', ['install', '--ignore-scripts'], v8Root)
@@ -440,7 +440,7 @@ try {
       const regenWorkspace = join(regenRoot, 'pnpm-workspace.yaml')
       const regenSettings = `${settings}packageExtensions:\n  'undici-types@*':\n    peerDependencies:\n      '@types/node': '*'\n    peerDependenciesMeta:\n      '@types/node':\n        optional: true\n`
       await writeFile(regenWorkspace, regenSettings)
-      await writeFile(join(regenRoot, 'package.json'), JSON.stringify({ name: 'xray-unenv-consumer', private: true, type: 'module', dependencies: { unenv: '2.0.0-rc.24', typescript: '5.9.3', '@types/node': nodeTypes } }))
+      await writeFile(join(regenRoot, 'package.json'), JSON.stringify({ name: 'xray-unenv-consumer', private: true, type: 'module', dependencies: auditedDependencies({ unenv: '2.0.0-rc.24', typescript: '5.9.3', '@types/node': nodeTypes }) }))
       await writeFile(join(regenRoot, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'esnext', module: 'nodenext', moduleResolution: 'nodenext', noEmit: true }, include: ['index.ts'] }))
       await writeFile(join(regenRoot, 'index.ts'), "import process, { cwd, env } from 'unenv/node/process';\nimport constants, { EACCES } from 'unenv/node/constants';\nconst n: number = EACCES; const d: string = cwd(); const e: NodeJS.ProcessEnv = env;\nconsole.log(process, constants, n, d, e);\n")
       checked('pnpm', ['install', '--ignore-scripts'], regenRoot)

@@ -9,11 +9,11 @@ import { cp, mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from '
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { minimumReleaseAge } from './registry-cutoff.mjs'
+import { auditedDependencies, registryWindow, remainingTime } from './registry-cutoff.mjs'
 
 const binary = resolve(process.argv[2] ?? fileURLToPath(new URL('../target/debug/xray', import.meta.url)))
 const temp = await mkdtemp(join(tmpdir(), 'xray-verify-loop-'))
-const releaseAge = minimumReleaseAge()
+const { deadline: registryDeadline, releaseAge } = registryWindow()
 // xray keeps recovery journals and workspace locks under XDG_STATE_HOME, so
 // point it at the test's own directory to keep runs isolated from each other
 // and from the user's real state.
@@ -22,7 +22,7 @@ const recoveryRoot = join(stateHome, 'xray', 'recovery')
 const testEnv = { ...process.env, TMPDIR: temp, XDG_STATE_HOME: stateHome }
 async function recoveryJournals() { return readdir(recoveryRoot).catch((error) => { if (error.code === 'ENOENT') return []; throw error }) }
 function run(command, args, cwd, env = testEnv) {
-  const result = spawnSync(command, args, { cwd, env, encoding: 'utf8', timeout: 240_000, maxBuffer: 20 * 1024 * 1024 })
+  const result = spawnSync(command, args, { cwd, env, encoding: 'utf8', timeout: remainingTime(registryDeadline, 240_000), maxBuffer: 20 * 1024 * 1024 })
   if (result.error) throw result.error
   return result
 }
@@ -52,7 +52,7 @@ async function fixture(label, globalStore, separateLock = false) {
   await mkdir(join(root, 'patches'))
   await writeFile(join(root, 'patches/preexisting.patch'), '# preexisting patch sentinel\n')
   await writeFile(join(root, 'pnpm-workspace.yaml'), `# preserve this policy\npackages:\n  - packages/*\nhoist: false\nignoreScripts: true\nenableGlobalVirtualStore: ${globalStore}\n${separateLock ? `sharedWorkspaceLockfile: false\n${globalStore ? '' : `virtualStoreDir: ${join(root, 'node_modules/.pnpm')}\n`}` : ''}minimumReleaseAge: ${releaseAge}\nstoreDir: ${join(temp, 'store')}\n`)
-  await writeFile(join(app, 'package.json'), JSON.stringify({ name: `xray-verify-${label}`, private: true, dependencies: { '@vue/consolidate': '1.0.0', pug: '3.0.3', 'then-pug': '2.0.0' } }))
+  await writeFile(join(app, 'package.json'), JSON.stringify({ name: `xray-verify-${label}`, private: true, dependencies: auditedDependencies({ '@vue/consolidate': '1.0.0', pug: '3.0.3', 'then-pug': '2.0.0' }) }))
   await writeFile(join(app, 'render.cjs'), "require('@vue/consolidate').pug.render('p hello', {}, (err, html) => { if (err) { console.error(err); process.exitCode = 1 } else if (html.trim() !== '<p>hello</p>') process.exitCode = 2 });\n")
   await writeFile(join(app, 'unrelated.cjs'), "const fail = (err) => { if (err) console.error(err); else console.error('intentional unrelated failure'); process.exitCode = 73 }; process.on('unhandledRejection', fail); try { require('@vue/consolidate').pug.render('p hello', {}, fail) } catch (err) { fail(err) }\n")
   checked('pnpm', ['install', '--ignore-scripts'], root)
@@ -65,7 +65,7 @@ async function declarationFixture(label, globalStore) {
   await mkdir(join(root, 'patches'), { recursive: true })
   await writeFile(join(root, 'patches/preexisting.patch'), '# preexisting patch sentinel\n')
   await writeFile(join(root, 'pnpm-workspace.yaml'), `# preserve this policy\nhoist: false\nignoreScripts: true\nenableGlobalVirtualStore: ${globalStore}\nminimumReleaseAge: ${releaseAge}\nstoreDir: ${join(temp, 'store')}\n`)
-  await writeFile(join(root, 'package.json'), JSON.stringify({ name: `xray-declarations-${label}`, private: true, type: 'module', dependencies: { 'v8-compile-cache-lib': '3.0.1', typescript: '5.9.3', '@types/node': '22.14.1' } }))
+  await writeFile(join(root, 'package.json'), JSON.stringify({ name: `xray-declarations-${label}`, private: true, type: 'module', dependencies: auditedDependencies({ 'v8-compile-cache-lib': '3.0.1', typescript: '5.9.3', '@types/node': '22.14.1' }) }))
   await writeFile(join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'esnext', module: 'nodenext', moduleResolution: 'nodenext', noEmit: true }, include: ['index.ts'] }))
   await writeFile(join(root, 'index.ts'), "import { install } from 'v8-compile-cache-lib'; const result = install({ cacheDir: '/tmp/example' }); result?.uninstall();\n")
   await writeFile(join(root, 'unrelated.cjs'), "const { spawnSync } = require('node:child_process'); const r = spawnSync(process.execPath, ['node_modules/typescript/bin/tsc', '--noEmit'], { stdio: 'inherit' }); if (r.error) console.error(r.error); process.exitCode = 73;\n")
@@ -243,6 +243,7 @@ try { require('@vue/consolidate').pug.render('p hello', {}, (err) => {
 `)
     const initialCancel = run(process.execPath, ['packages/app/block.cjs'], cancellation.root)
     assert(initialCancel.status !== 0 && initialCancel.stderr.includes("Cannot find module 'pug'"), `${label}: cancellation fixture should fail before repair`)
+    if (remainingTime(registryDeadline, 301_000) < 301_000) throw new Error('insufficient registry window for cancellation test')
     const child = spawn(binary, ['--verify', cancellation.root, '--', process.execPath, 'packages/app/block.cjs'], { cwd: cancellation.root, env: testEnv, stdio: ['ignore', 'pipe', 'pipe'] })
     let childOutput = ''
     let heartbeatAtRollback = null
@@ -284,7 +285,7 @@ try { require('@vue/consolidate').pug.render('p hello', {}, (err) => {
     const docusApp = join(docusRoot, 'packages/app')
     await mkdir(docusApp, { recursive: true })
     await writeFile(join(docusRoot, 'pnpm-workspace.yaml'), `# preserve policy\npackages:\n  - packages/*\nhoist: false\nignoreScripts: true\nenableGlobalVirtualStore: ${globalStore}\nminimumReleaseAge: ${releaseAge}\nstoreDir: ${join(temp, 'store')}\n`)
-    await writeFile(join(docusApp, 'package.json'), JSON.stringify({ name: `xray-docusaurus-${label}`, private: true, type: 'module', dependencies: { '@docusaurus/core': '3.10.2', '@docusaurus/types': '3.10.2', history: '5.3.0', typescript: '5.9.3', '@types/node': '22.14.1', '@types/mdast': '4.0.4', '@types/react': '18.3.24' } }))
+    await writeFile(join(docusApp, 'package.json'), JSON.stringify({ name: `xray-docusaurus-${label}`, private: true, type: 'module', dependencies: auditedDependencies({ '@docusaurus/core': '3.10.2', '@docusaurus/types': '3.10.2', history: '5.3.0', typescript: '5.9.3', '@types/node': '22.14.1', '@types/mdast': '4.0.4', '@types/react': '18.3.24' }) }))
     await writeFile(join(docusApp, 'tsconfig.json'), JSON.stringify({ compilerOptions: { typeRoots: ['./node_modules/@types'], target: 'es2022', module: 'nodenext', moduleResolution: 'nodenext', noEmit: true }, include: ['index.ts'] }))
     await writeFile(join(docusApp, 'index.ts'), "import type { default as Dispatcher } from '@docusaurus/core/lib/client/ClientLifecyclesDispatcher.js'; export type API = typeof Dispatcher;\n")
     checked('pnpm', ['install', '--ignore-scripts'], docusRoot)
@@ -304,7 +305,7 @@ try { require('@vue/consolidate').pug.render('p hello', {}, (err) => {
     const unoApp = join(unoRoot, 'packages/app')
     await mkdir(unoApp, { recursive: true })
     await writeFile(join(unoRoot, 'pnpm-workspace.yaml'), `# preserve policy\npackages:\n  - packages/*\nhoist: false\nignoreScripts: true\nenableGlobalVirtualStore: ${globalStore}\nminimumReleaseAge: ${releaseAge}\nstoreDir: ${join(temp, 'store')}\n`)
-    await writeFile(join(unoApp, 'package.json'), JSON.stringify({ name: `xray-unocss-${label}`, private: true, type: 'module', dependencies: { '@unocss/autocomplete': '66.11.0', '@unocss/core': '66.11.0' } }))
+    await writeFile(join(unoApp, 'package.json'), JSON.stringify({ name: `xray-unocss-${label}`, private: true, type: 'module', dependencies: auditedDependencies({ '@unocss/autocomplete': '66.11.0', '@unocss/core': '66.11.0' }) }))
     await writeFile(join(unoApp, 'index.mjs'), "import { searchUsageBoundary } from '@unocss/autocomplete'; const result = searchUsageBoundary('hello', 2); if (result.content !== 'hello') throw new Error('wrong autocomplete result');\n")
     checked('pnpm', ['install', '--ignore-scripts'], unoRoot)
     const unoActual = await realpath(join(unoApp, 'node_modules/@unocss/autocomplete'))
@@ -322,7 +323,7 @@ try { require('@vue/consolidate').pug.render('p hello', {}, (err) => {
     const sandboxApp = join(sandboxRoot, 'packages/app')
     await mkdir(sandboxApp, { recursive: true })
     await writeFile(join(sandboxRoot, 'pnpm-workspace.yaml'), `# preserve policy\npackages:\n  - packages/*\nhoist: false\nignoreScripts: true\nenableGlobalVirtualStore: ${globalStore}\nminimumReleaseAge: ${releaseAge}\nstoreDir: ${join(temp, 'store')}\n`)
-    await writeFile(join(sandboxApp, 'package.json'), JSON.stringify({ name: `xray-sandbox-${label}`, private: true, type: 'module', dependencies: { '@vercel/sandbox': '1.8.0', '@types/ms': '2.1.0', typescript: '5.9.3', '@types/node': '22.14.1' } }))
+    await writeFile(join(sandboxApp, 'package.json'), JSON.stringify({ name: `xray-sandbox-${label}`, private: true, type: 'module', dependencies: auditedDependencies({ '@vercel/sandbox': '1.8.0', '@types/ms': '2.1.0', typescript: '5.9.3', '@types/node': '22.14.1' }) }))
     await writeFile(join(sandboxApp, 'tsconfig.json'), JSON.stringify({ compilerOptions: { strict: true, target: 'es2022', module: 'nodenext', moduleResolution: 'nodenext', noEmit: true }, include: ['index.ts'] }))
     await writeFile(join(sandboxApp, 'index.ts'), "import type { signInAndGetToken } from '@vercel/sandbox/dist/utils/dev-credentials.js'; export type API = typeof signInAndGetToken;\n")
     checked('pnpm', ['install', '--ignore-scripts'], sandboxRoot)
