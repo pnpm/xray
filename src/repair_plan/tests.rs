@@ -82,6 +82,41 @@ fn does_not_guess_when_types_versions_disagree_or_provider_is_absent() {
     }];
     assert!(select(&reports, &packages, root.path()).unwrap().is_empty());
 }
+
+#[test]
+fn selects_only_verified_installed_npm_aliases() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("package.json"), r#"{"dependencies":{"alias-provider":"npm:real-provider@^7.0.0","wrong-name":"npm:expected@^1","wrong-range":"npm:real-provider@^8","pre-release":"npm:preview@*"}}"#).unwrap();
+    let packages = vec![
+        package(root.path(), "node_modules/alias-provider", "real-provider", "7.0.0"),
+        package(root.path(), "node_modules/wrong-name", "other", "1.0.0"),
+        package(root.path(), "node_modules/wrong-range", "real-provider", "7.0.0"),
+        package(root.path(), "node_modules/pre-release", "preview", "1.0.0-beta.1"),
+    ];
+    let reports = vec![PackageReport {
+        package: "consumer@1.0.0".into(),
+        findings: ["alias-provider", "wrong-name", "wrong-range", "pre-release"]
+            .into_iter()
+            .map(|name| finding(name, Origin::Runtime, None))
+            .collect(),
+    }];
+    let selected = select(&reports, &packages, root.path()).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].findings.len(), 1);
+    assert_eq!(selected[0].findings[0].dependency, "alias-provider");
+    assert_eq!(selected[0].findings[0].declared_range, None);
+    assert!(select(&reports, &packages[1..], root.path()).unwrap().is_empty());
+}
+
+#[test]
+fn npm_alias_parser_accepts_scopes_and_rejects_nonportable_specs() {
+    let (name, range) = super::npm_alias("npm:@scope/real@^2.0.0").unwrap();
+    assert_eq!(name, "@scope/real");
+    assert!(range.unwrap().satisfies(&node_semver::Version::parse("2.1.0").unwrap()));
+    assert_eq!(super::npm_alias("npm:@scope/real").unwrap().0, "@scope/real");
+    assert!(super::npm_alias("npm:real@latest").is_none());
+    assert!(super::npm_alias("npm:../outside@1").is_none());
+}
 #[test]
 fn chooses_types_for_untyped_provider_but_not_one_that_ships_types() {
     let root = tempfile::tempdir().unwrap();

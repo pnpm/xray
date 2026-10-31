@@ -30,6 +30,7 @@ pub fn select(
             provider.typed |= typed;
         }
     }
+    add_installed_aliases(project, packages, &mut providers)?;
 
     let mut selected = Vec::new();
     for report in reports {
@@ -80,6 +81,88 @@ pub fn select(
         }
     }
     Ok(selected)
+}
+
+/// An npm alias is available under its importer key, not its manifest name.
+/// Only accept an alias when the link resolves to a discovered installed
+/// package whose actual name and version agree with the importer's request.
+fn add_installed_aliases(
+    root: &Path,
+    packages: &[PathBuf],
+    providers: &mut BTreeMap<String, Provider>,
+) -> Result<()> {
+    let installed: BTreeSet<PathBuf> =
+        packages.iter().map(|package| package.canonicalize()).collect::<std::io::Result<_>>()?;
+    for importer in crate::workspace::projects(root)? {
+        if !importer.join("package.json").is_file() {
+            continue;
+        }
+        let manifest = Manifest::read(&importer)?;
+        for (alias, request) in manifest
+            .dependencies
+            .iter()
+            .chain(manifest.dev_dependencies.iter())
+            .chain(manifest.optional_dependencies.iter())
+            .chain(manifest.peer_dependencies.iter())
+        {
+            if !valid_package_name(alias) {
+                continue;
+            }
+            let Some((name, range)) = npm_alias(request) else {
+                continue;
+            };
+            let path = importer.join("node_modules").join(alias);
+            let Ok(actual) = path.canonicalize() else {
+                continue;
+            };
+            if !installed.contains(&actual) {
+                continue;
+            }
+            let provider = Manifest::read(&actual)?;
+            let Ok(version) = node_semver::Version::parse(&provider.version) else {
+                continue;
+            };
+            // The emitted optional peer is `*`; avoid guessing whether a
+            // prerelease provider will satisfy it across pnpm configurations.
+            if !version.pre_release.is_empty()
+                || provider.name != name
+                || range.as_ref().is_some_and(|range| !range.satisfies(&version))
+            {
+                continue;
+            }
+            let typed = has_types(&provider, &actual);
+            let entry = providers.entry(alias.clone()).or_default();
+            entry.versions.insert(provider.version);
+            entry.typed |= typed;
+        }
+    }
+    Ok(())
+}
+
+fn npm_alias(request: &str) -> Option<(&str, Option<node_semver::Range>)> {
+    let target = request.strip_prefix("npm:")?;
+    let separator = target.rfind('@').filter(|index| *index > 0);
+    let (name, range) = match separator {
+        Some(index) => (&target[..index], Some(target[index + 1..].parse().ok()?)),
+        None => (target, None),
+    };
+    valid_package_name(name).then_some((name, range))
+}
+
+fn valid_package_name(name: &str) -> bool {
+    let valid_segment = |segment: &str| {
+        !segment.is_empty()
+            && segment != "."
+            && segment != ".."
+            && segment.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"-._~".contains(&byte))
+    };
+    if let Some(scoped) = name.strip_prefix('@') {
+        scoped
+            .split_once('/')
+            .is_some_and(|(scope, package)| valid_segment(scope) && valid_segment(package))
+    } else {
+        valid_segment(name)
+    }
 }
 
 // Prefer a provider explicitly declared by a workspace importer. If importers
