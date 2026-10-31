@@ -25,11 +25,16 @@ try {
   await writeFile(join(pkg, 'index.js'), "module.exports = () => require('missing-runtime');\n")
   await mkdir(join(root, 'node_modules/missing-runtime'), { recursive: true })
   await writeFile(join(root, 'node_modules/missing-runtime/package.json'), JSON.stringify({ name: 'missing-runtime', version: '1.0.0' }))
-  const conflict = "# preserve user settings\npackageExtensions:\n  'safety-fixture@1.0.0':\n    peerDependenciesMeta:\n      'missing-runtime':\n        optional: false\n"
-  await writeFile(workspace, conflict)
+  const beforeDryRun = '# preserve user settings\npackages: []\n'
+  await writeFile(workspace, beforeDryRun)
   const dryRun = run(['--fix', '--dry-run', root])
   assert(dryRun.status === 0 && dryRun.stdout.includes('missing-types'), `dry run failed: ${dryRun.stderr}`)
-  assert(await readFile(workspace, 'utf8') === conflict, 'dry run wrote to workspace')
+  assert(await readFile(workspace, 'utf8') === beforeDryRun, 'dry run wrote to workspace')
+  const conflict = "# preserve user settings\npackageExtensions:\n  'safety-fixture@1.0.0':\n    peerDependenciesMeta:\n      'missing-runtime':\n        optional: false\n"
+  await writeFile(workspace, conflict)
+  const conflictingDryRun = run(['--fix', '--dry-run', root])
+  assert(conflictingDryRun.status !== 0 && conflictingDryRun.stderr.includes('conflict'), `expected conflicting dry-run failure: ${conflictingDryRun.stderr}`)
+  assert(await readFile(workspace, 'utf8') === conflict, 'conflicting dry run wrote to workspace')
   const conflicting = run(['--fix', root])
   assert(conflicting.status !== 0 && conflicting.stderr.includes('conflict'), `expected conflicting repair failure: ${conflicting.stderr}`)
   assert(await readFile(workspace, 'utf8') === conflict, 'conflicting repair partially wrote to workspace')
