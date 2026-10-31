@@ -2,7 +2,14 @@
 set -euo pipefail
 
 binary=${1:?expected path to GNU/Linux binary}
-maximum=$(readelf -W --version-info "$binary" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -Vu | tail -n 1)
+versions=$(readelf -W --version-info "$binary")
+# Non-numeric requirements such as GLIBC_ABI_DT_RELR (glibc 2.36+) carry no
+# version number to compare, so reject any of them outright.
+if abi=$(grep -oE 'GLIBC_ABI_[A-Za-z0-9_]+' <<<"$versions" | sort -u) && test -n "$abi"; then
+  printf 'unexpected glibc ABI requirement: %s\n' $abi >&2
+  exit 1
+fi
+maximum=$(grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' <<<"$versions" | sort -Vu | tail -n 1)
 test -n "$maximum"
 test "$(printf '%s\n%s\n' "$maximum" GLIBC_2.28 | sort -V | tail -n 1)" = GLIBC_2.28
 "$binary" --version
