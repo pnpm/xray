@@ -37,6 +37,44 @@ function invoke({ root, roots }) {
   return JSON.parse(result.stdout)
 }
 
+test('removes only an unresolved final identifier while preserving the declaration', { skip: unavailable }, async () => {
+  const source = 'export interface Contract { readonly item: "fixed" }\nexport declare const count: number;\n// Retain this comment.\nstray\n'
+  const context = await fixture(source, 'import { count, type Contract } from "xray-test-fixture";\nconst a: Contract = { item: "fixed" }; void [a, count];\n')
+  try {
+    const result = invoke(context)
+    assert.equal(result.files.length, 1, JSON.stringify(result.messages))
+    assert.equal(result.files[0].replacement, source.replace('stray', ''))
+    await writeFile(join(context.pkg, 'index.d.mts'), result.files[0].replacement)
+    const tsc = spawnSync(process.execPath, [join(context.root, 'node_modules/typescript/bin/tsc'), '--noEmit'], { cwd: context.root, encoding: 'utf8' })
+    assert.equal(tsc.status, 0, tsc.stdout + tsc.stderr)
+  } finally { await rm(context.root, { recursive: true, force: true }) }
+})
+
+test('allows an undeclared runtime export when removing an orphan identifier', { skip: unavailable }, async () => {
+  const source = 'export declare const count: number;\nstray\n'
+  const context = await fixture(source, 'import { count } from "xray-test-fixture"; void count;\n')
+  try {
+    await writeFile(join(context.pkg, 'index.mjs'), 'export const count = 1;\nexport const internal = 2;\n')
+    const result = invoke(context)
+    assert.equal(result.files.length, 1, JSON.stringify(result.messages))
+    assert.equal(result.files[0].replacement, source.replace('stray', ''))
+  } finally { await rm(context.root, { recursive: true, force: true }) }
+})
+
+for (const [name, source] of [
+  ['known identifier', 'export declare const count: number;\ncount;\n'],
+  ['nonterminal identifier', 'stray;\nexport declare const count: number;\n'],
+  ['call expression', 'export declare const count: number;\nstray();\n'],
+  ['additional declaration error', 'export declare const;\nstray\n'],
+  ['runtime export mismatch', 'export declare const count: number;\nexport declare const hidden: string;\nstray\n'],
+]) {
+  test(`does not repair ${name}`, { skip: unavailable }, async () => {
+    const context = await fixture(source, 'import { count } from "xray-test-fixture"; void count;\n')
+    try { assert.equal(invoke(context).files.length, 0) }
+    finally { await rm(context.root, { recursive: true, force: true }) }
+  })
+}
+
 const declaration = 'export interface Contract { readonly deep: { kind: "left" | "right" } }\nexport type Choice = Contract["deep"]["kind"];\nexport var count = 1;\n'
 const consumer = 'import { count, type Contract, type Choice } from "xray-test-fixture";\nconst a: number = count;\nconst b: Choice = "left";\n// @ts-expect-error invalid exported literal\nconst c: Choice = "other";\nconst d: Contract = { deep: { kind: b } };\nvoid [a,c,d];\n'
 

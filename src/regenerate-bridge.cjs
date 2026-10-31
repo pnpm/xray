@@ -32,7 +32,7 @@ const initial = ts.getPreEmitDiagnostics(original);
 const syntactic = original.getSyntacticDiagnostics();
 // TS1123 (empty variable declaration list) is reported by the semantic pass.
 const syntax = initial.filter(d => d.file && /\.d\.(?:ts|mts|cts)$/.test(d.file.fileName) &&
-  ([1039, 1046, 1123].includes(d.code) || syntactic.some(s => s.file === d.file && s.code === d.code && s.start === d.start)));
+  ([1036, 1039, 1046, 1123].includes(d.code) || syntactic.some(s => s.file === d.file && s.code === d.code && s.start === d.start)));
 const contained = (file, root) => { const p = path.relative(root, file); return p !== '' && !p.startsWith(`..${path.sep}`) && p !== '..' && !path.isAbsolute(p); };
 const candidates = new Map();
 const skipped = { missingDeclaration: 0, outsideRoots: 0, missingRuntime: 0, nonCanonicalRuntime: 0, sourceCollision: 0 };
@@ -47,12 +47,27 @@ for (const diagnostic of syntax) {
   if (!fs.existsSync(runtime)) { skipped.missingRuntime++; continue; }
   if (!samePath(real(runtime), runtime)) { skipped.nonCanonicalRuntime++; continue; }
   const perFile = syntax.filter(item => samePath(real(item.file.fileName), declaration));
+  let orphan;
+  if (perFile.some(item => item.code === 1036)) {
+    const file = diagnostic.file;
+    const last = file.statements[file.statements.length - 1];
+    const fileDiagnostics = initial.filter(item => item.file && samePath(real(item.file.fileName), declaration));
+    const start = last?.getStart(file);
+    const identifier = last && ts.isExpressionStatement(last) && ts.isIdentifier(last.expression) && last.expression;
+    const checker = original.getTypeChecker();
+    if (!identifier || checker.getSymbolAtLocation(identifier) ||
+        checker.resolveName(identifier.text, identifier, ts.SymbolFlags.Value | ts.SymbolFlags.Type | ts.SymbolFlags.Namespace, false) ||
+        fileDiagnostics.length !== 2 || ![1036, 2304].every(code => fileDiagnostics.some(item => item.code === code)) ||
+        !fileDiagnostics.every(item => item.start !== undefined && item.length !== undefined && item.start >= start && item.start + item.length <= last.end)) continue;
+    orphan = { start, end: last.end };
+  }
   // Treat declaration text as virtual TypeScript only for the specific
   // ambient-initializer failure, never for arbitrary malformed declarations.
   const virtual = perFile.some(item => item.code === 1039) && perFile.every(item => [1039, 1046].includes(item.code));
   const virtualFile = declaration.replace(/\.d\.(mts|cts|ts)$/, '.$1');
   if (virtual && fs.existsSync(virtualFile)) { skipped.sourceCollision++; continue; }
-  candidates.set(declaration, { root, runtime, virtual, virtualFile });
+  candidates.set(declaration, { root, runtime, virtual, virtualFile, orphan,
+    original: fs.readFileSync(declaration, 'utf8'), runtimeText: fs.readFileSync(runtime, 'utf8') });
 }
 if (!candidates.size || !initial.length) {
   finish([], syntax.length ? [`No eligible adjacent JavaScript source for the reported declaration errors (${JSON.stringify(skipped)}).`] : []);
@@ -72,8 +87,8 @@ const emit = emitProgram.emit(undefined, (name, text, _bom, _onError, sourceFile
   if (sourceFiles?.length === 1) output.set(key(real(sourceFiles[0].fileName)), text);
 }, undefined, true);
 if (emit.emitSkipped) reject('Declaration generation rejected: TypeScript skipped emit.', emit.diagnostics);
-for (const [declaration, { runtime }] of candidates) {
-  const replacement = output.get(key(runtime));
+for (const [declaration, { runtime, orphan, original: originalText }] of candidates) {
+  const replacement = orphan ? originalText.slice(0, orphan.start) + originalText.slice(orphan.end) : output.get(key(runtime));
   if (!replacement) reject(`Declaration generation rejected: no declaration emitted for ${runtime}.`);
   generated.set(key(declaration), replacement);
 }
@@ -82,7 +97,7 @@ for (const [declaration, { runtime }] of candidates) {
 // only unsupported ambient initializers. This retains declaration-only exports
 // which cannot be reconstructed from JavaScript. The host never writes source.
 const virtualSources = new Map([...candidates].filter(([, value]) => value.virtual)
-  .map(([declaration, value]) => [key(value.virtualFile), fs.readFileSync(declaration, 'utf8')]));
+  .map(([, value]) => [key(value.virtualFile), value.original]));
 if (virtualSources.size) {
   const virtualHost = ts.createCompilerHost(emitOptions);
   const fileExists = virtualHost.fileExists.bind(virtualHost);
@@ -129,16 +144,21 @@ const exportsOf = (checker, file) => {
   const symbol = checker.getSymbolAtLocation(file);
   return symbol && checker.getExportsOfModule(symbol).map(x => x.name).sort();
 };
-for (const [declaration, { runtime, virtual }] of candidates) {
+for (const [declaration, { runtime, virtual, orphan, original: originalText, runtimeText }] of candidates) {
   const source = emitProgram.getSourceFile(runtime);
   // Preserve the filename spelling used by the consumer's program, which may be symlinked.
   const decl = fixed.getSourceFiles().find(file => samePath(real(file.fileName), declaration));
   const oldFile = original.getSourceFiles().find(file => samePath(real(file.fileName), declaration));
+  if (!oldFile || oldFile.text !== originalText || !source || source.text !== runtimeText ||
+      fs.readFileSync(declaration, 'utf8') !== originalText || fs.readFileSync(runtime, 'utf8') !== runtimeText)
+    reject('Declaration generation rejected: source changed during verification.');
   const oldSymbol = oldFile && originalChecker.getSymbolAtLocation(oldFile);
   const newSymbol = decl && fixedChecker.getSymbolAtLocation(decl);
   if (!oldSymbol || !newSymbol) reject(`Declaration generation rejected: cannot recover original exports for ${declaration}.`);
   const oldExports = originalChecker.getExportsOfModule(oldSymbol);
   const newExports = fixedChecker.getExportsOfModule(newSymbol);
+  if (orphan && JSON.stringify(oldExports.map(item => item.name).sort()) !== JSON.stringify(newExports.map(item => item.name).sort()))
+    reject(`Declaration generation rejected: declaration exports changed in ${declaration}.`);
   const actualFlags = (checker, symbol) => {
     try { return (symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol).flags; }
     catch { return undefined; }
@@ -163,6 +183,8 @@ for (const [declaration, { runtime, virtual }] of candidates) {
     if (oldFlags === undefined || newFlags === undefined) reject(`Declaration generation rejected: cannot recover export ${oldExport.name} in ${declaration}.`);
     for (const mask of [ts.SymbolFlags.Type, ts.SymbolFlags.Value, ts.SymbolFlags.Namespace]) {
       if ((oldFlags & mask) && !(newFlags & mask)) reject(`Declaration generation rejected: existing export ${oldExport.name} would lose its type, value, or namespace in ${declaration}.`);
+      if (orphan && Boolean(oldFlags & mask) !== Boolean(newFlags & mask))
+        reject(`Declaration generation rejected: existing export ${oldExport.name} would change kind in ${declaration}.`);
     }
     // Names and symbol kinds alone are insufficient: a generated `any` can
     // silently erase an existing typed API while the consumer still compiles.
@@ -196,14 +218,16 @@ for (const [declaration, { runtime, virtual }] of candidates) {
     const symbol = checker.getSymbolAtLocation(file);
     return symbol && checker.getExportsOfModule(symbol).filter(item => actualFlags(checker, item) & ts.SymbolFlags.Value).map(item => item.name).sort();
   };
-  const jsExports = source && (virtual ? valueExports(jsChecker, source) : exportsOf(jsChecker, source));
-  const declarationExports = decl && (virtual ? valueExports(fixedChecker, decl) : exportsOf(fixedChecker, decl));
-  if (!jsExports || !declarationExports || JSON.stringify(jsExports) !== JSON.stringify(declarationExports)) {
+  const jsExports = source && (virtual || orphan ? valueExports(jsChecker, source) : exportsOf(jsChecker, source));
+  const declarationExports = decl && (virtual || orphan ? valueExports(fixedChecker, decl) : exportsOf(fixedChecker, decl));
+  const compatible = jsExports && declarationExports && (orphan ?
+    declarationExports.every(name => jsExports.includes(name)) : JSON.stringify(jsExports) === JSON.stringify(declarationExports));
+  if (!compatible) {
     reject(`Declaration generation rejected: exports differ for ${runtime}.`);
   }
 }
 finish([...candidates].map(([file, value]) => ({
-  root: value.root, file, original: fs.readFileSync(file, 'utf8'), replacement: generated.get(key(file)),
+  root: value.root, file, original: value.original, replacement: generated.get(key(file)),
 }))); 
 
 function diagnosticHost() { return { getCanonicalFileName: x => x, getCurrentDirectory: () => project, getNewLine: () => '\n' }; }
