@@ -122,7 +122,8 @@ Verification requires pnpm 9 or newer, existing lockfiles, and a reproducible
 installed layout.
 Persist hoist and virtual store settings in pnpm configuration before running it;
 settings supplied only to an earlier install command are refused. Xray checks
-that installs and verification commands preserve that layout.
+that installs and verification commands preserve that layout. Reinstalls keep
+the original `--prod`, `--dev` or `--no-optional` selection.
 
 Unsuccessful searches restore workspace settings, root and importer locks, generated patches, and the locked
 dependency graph, returning the original command's failure status. User edits
@@ -138,8 +139,11 @@ Failed installation trials count toward the verification limit. Group-removal
 checks reduce interacting repairs; the retained set passes single-removal checks
 without claiming the globally smallest solution for arbitrary commands.
 
-A recovery journal is persisted before mutation. If rollback encounters an edit
-or installation failure, xray retains that journal and prints its location:
+A recovery journal is persisted before mutation, under `xray/recovery` in the
+user's state directory: `$XDG_STATE_HOME`, falling back to `~/.local/state`,
+`~/Library/Application Support` on macOS, or `%LOCALAPPDATA%` on Windows. If
+rollback encounters an edit or installation failure, xray retains that journal
+and prints its location:
 
 ```sh
 xray /path/to/workspace --recover /path/to/xray-recovery-directory
@@ -148,7 +152,9 @@ xray /path/to/workspace --recover /path/to/xray-recovery-directory
 Recovery checks recorded file states before replacing anything and refuses to
 overwrite intervening edits. A crash during an uncheckpointed write can require
 manual reconciliation using the saved original bytes. Journals cannot be
-recovered while an active verification process holds their lease.
+recovered while an active verification process holds their lease. `--verify`
+and `--recover` also take a per-workspace lock in the state directory's
+`xray/locks` folder, so only one of them runs against a workspace at a time.
 
 Preview selected repairs, apply them, then let pnpm update its lockfile and links:
 
@@ -294,8 +300,12 @@ Stylesheet dependencies count too: CSS, SCSS, Sass and Less `@import`, `@use` an
 `@forward` rules are parsed with [raffia](https://github.com/g-plane/raffia).
 Local Sass partials, index files and import-only files are followed before a bare
 name is treated as an external package. Builtin `sass:` modules, remote URLs and
-interpolated paths are excluded. Bare CSS names can also be browser-relative
-URLs, so automatic repairs require an installed provider.
+interpolated paths are excluded, as are imports that stay plain CSS at runtime:
+Sass imports of `.css` files, `url()` or media-qualified imports, and Less
+`(css)` or `(optional)` imports. In plain CSS a single file name such as
+`reset.css` is a sibling file, while `~pkg` and `pkg/x.css` name packages. Bare
+CSS names can also be browser-relative URLs, so automatic repairs require an
+installed provider.
 
 A specifier is not reported when nothing has to be installed for it to resolve:
 relative paths, subpath imports, protocol URLs and Node builtins. A
