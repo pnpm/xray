@@ -288,3 +288,26 @@ ambient namespace is controlled by the consumer's type inclusion, so its
 presence alone is not evidence that linking a package dependency will repair a
 strict-store failure. Tarball: `https://registry.npmjs.org/consola/-/consola-3.4.2.tgz`,
 integrity `sha512-5IKcdX0nnYavi6G7TtOhwkYzyjfJlatbjMjuLSfE2kYT5pMDOilZ4OvMhi637CcDICTmz3wARPoyhqyX1Y+XvA==`.
+
+Follow-up isolated Nuxt global-store runs passed `dependency.test.ts` (18
+checks), `app-config.test.ts` (3) and `fs-deny.test.ts` (2), both separately and
+together. The same three `jiti-fallback.spec.ts` assertion failures occurred in both local
+and global layouts and reproduced alone under the global store: the assertion expects `add -D jiti`, while the generated message includes
+`add --ignore-workspace-root-check -D jiti`. Tracing that focused run observed
+Vite's optional `bufferutil` and `fsevents` resolution attempts; neither was
+shown to cause the assertion failures. No missing registry dependency was
+confirmed for these failures, no safe automatic fix was identified, and the
+broad-run failure mechanism remains unconfirmed.
+
+## A declaration that cannot be safely regenerated from shipped JavaScript
+
+`is-bun-module@2.0.0` publishes `dist/shared.d.ts` with variable and object
+initializers in an ambient declaration file. A global-store consumer importing
+`isBunModule` under TypeScript 5.9.3 produced TS1046 and TS1039 diagnostics.
+The package's published declaration exports the type-only names `BunVersion`
+and `Modules`. Running TypeScript declaration emit on the adjacent shipped
+`shared.js` generated only an `any` CommonJS export, without those contracts.
+That output is not a safe repair. Xray's regeneration dry run exited incomplete
+and did not propose a declaration patch. The pinned archive is
+`https://registry.npmjs.org/is-bun-module/-/is-bun-module-2.0.0.tgz`, integrity
+`sha512-gNCGbnnnnFAUGKeZ9PdbyeGYJqewpmc2aKHUEMO5nQPWU9lOmv7jcmQIv+qHD8fXW6W7qfuCwX4rY9LNRjXrkQ==`.

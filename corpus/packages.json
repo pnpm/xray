@@ -263,5 +263,20 @@
     ],
     "maxDiagnosticLines": 0,
     "evidence": "Published CommonJS and ESM entrypoints import date-fns, absent from the manifest. Identified from the public nubjs package-extensions dataset and independently tested."
+  },
+  {
+    "name": "eslint-config-next",
+    "version": "16.4.3",
+    "url": "https://registry.npmjs.org/eslint-config-next/-/eslint-config-next-16.4.3.tgz",
+    "sha512": "8fd22a0666ba69ba7cd347eb7545116a2cd83205ce2be8cd1b2aba0ac61c33d031a5226ce43fd380c346780991522959bc0ee0f55d53afbd60360f7f4954ee31",
+    "expected": [
+      {
+        "dependency": "next",
+        "severity": "undeclared",
+        "origin": "runtime"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The exported parser subpath requires next/dist/compiled/babel/eslint-parser but next is absent from the package manifest."
   }
 ]

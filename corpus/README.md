@@ -57,7 +57,7 @@ cargo build
 node corpus/install-test.mjs
 ```
 
-The integration test covers thirteen known broken releases; it does not establish that
+The integration test covers fourteen known broken releases; it does not establish that
 all generated fixes are safe or that every registry package has been checked.
 
 ## CLI safety checks

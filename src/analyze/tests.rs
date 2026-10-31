@@ -127,6 +127,30 @@ fn imports_map_targets_are_followed_and_external_dependencies_reported() {
 }
 
 #[test]
+fn type_imports_keep_conditional_fallback_when_types_target_cannot_resolve() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest(
+            "pkg",
+            r##","exports":"./index.js","types":"./index.d.ts","imports":{"#dependency":{"types":"./missing.d.ts","default":"fallback-package/subpath"}}"##,
+        ),
+    );
+    write(&dir.join("index.js"), "module.exports = {};\n");
+    write(
+        &dir.join("index.d.ts"),
+        "import type { T } from '#dependency'; export type Value = T;\n",
+    );
+    let report = crate::analyze::analyze_for_repair(&dir, Scope::Declared).unwrap().unwrap();
+    assert_eq!(report.findings.len(), 1);
+    assert_eq!(report.findings[0].dependency, "fallback-package");
+    assert_eq!(report.findings[0].origin, Origin::Types);
+    assert_eq!(report.findings[0].evidence.first().unwrap().specifier, "#dependency");
+}
+
+#[test]
 fn browser_mappings_are_followed_only_for_reached_runtime_references() {
     use crate::fixtures::{manifest, write};
     let root = tempfile::tempdir().unwrap();
