@@ -48,13 +48,14 @@ xray /path/to/project
 
 Project scans traverse workspace links to find dependencies, but skip authored
 workspace packages. When invoked from a member, repairs use the nearest workspace
-settings file rather than creating a nested workspace. Scan authored packages
-explicitly if needed:
+settings file rather than creating a nested workspace.
 
-Scan a single package directory:
+Scan a single package directory, such as an installed dependency or an authored
+workspace package that project scans skip:
 
 ```sh
 xray --package ./node_modules/some-package
+xray --package ./packages/some-workspace-package
 ```
 
 Output the findings as JSON:
@@ -270,8 +271,10 @@ package's surface whether its author meant that or not, and every one is read.
 
 Every file a package ships as behaviour or as types — `.js`, `.mjs`, `.cjs`,
 `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx` and the `.d.ts` family — parsed with
-[oxc](https://oxc.rs). Flow-marked files use the bundled official Flow parser
-through Node when their syntax is unsupported by oxc. Every position that names a module counts: `import` and
+[oxc](https://oxc.rs). Outside TypeScript, files with a `@flow` pragma always
+go through the bundled official Flow parser, as does any other file oxc fails
+to parse; that parser runs on Node, so `node` must be on `PATH` for such
+files. Every position that names a module counts: `import` and
 `export … from`, `export *`, `require()` and `require.resolve()`, dynamic
 `import()`, type-position `import("pkg")`, `import x = require("pkg")`, and
 `/// <reference types="pkg" />`.
