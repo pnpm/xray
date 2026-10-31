@@ -307,7 +307,17 @@ initializers in an ambient declaration file. A global-store consumer importing
 The package's published declaration exports the type-only names `BunVersion`
 and `Modules`. Running TypeScript declaration emit on the adjacent shipped
 `shared.js` generated only an `any` CommonJS export, without those contracts.
-That output is not a safe repair. Xray's regeneration dry run exited incomplete
-and did not propose a declaration patch. The pinned archive is
+That JavaScript-derived output is not a safe repair. Xray's regeneration dry
+run exited incomplete and did not propose a declaration patch. The pinned archive is
 `https://registry.npmjs.org/is-bun-module/-/is-bun-module-2.0.0.tgz`, integrity
 `sha512-gNCGbnnnnFAUGKeZ9PdbyeGYJqewpmc2aKHUEMO5nQPWU9lOmv7jcmQIv+qHD8fXW6W7qfuCwX4rY9LNRjXrkQ==`.
+
+A follow-up compiled the unchanged malformed declaration as a virtual TypeScript
+implementation and emitted declarations with TypeScript 5.9.3 in strict
+NodeNext mode. Applying that output as a manual pnpm patch made a strict consumer
+pass, including a positive `BunVersion` assignment and an expected error for an
+invalid version string. The compiler reported the same seven exported names;
+resolved export flags and rendered value, function, and expanded type-alias
+signatures matched for this package. This is evidence for a package-specific
+candidate, not a proof that declaration text can always be safely re-emitted as
+implementation or that rendered type strings are a complete API equivalence test.

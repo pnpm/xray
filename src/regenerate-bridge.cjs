@@ -32,7 +32,7 @@ const initial = ts.getPreEmitDiagnostics(original);
 const syntactic = original.getSyntacticDiagnostics();
 // TS1123 (empty variable declaration list) is reported by the semantic pass.
 const syntax = initial.filter(d => d.file && /\.d\.(?:ts|mts|cts)$/.test(d.file.fileName) &&
-  (d.code === 1123 || syntactic.some(s => s.file === d.file && s.code === d.code && s.start === d.start))); 
+  ([1039, 1046, 1123].includes(d.code) || syntactic.some(s => s.file === d.file && s.code === d.code && s.start === d.start)));
 const contained = (file, root) => { const p = path.relative(root, file); return p !== '' && !p.startsWith(`..${path.sep}`) && p !== '..' && !path.isAbsolute(p); };
 const candidates = new Map();
 for (const diagnostic of syntax) {
@@ -41,7 +41,13 @@ for (const diagnostic of syntax) {
   if (!root) continue;
   const runtime = declaration.replace(/\.d\.(mts|cts|ts)$/, (_, ext) => ext === 'mts' ? '.mjs' : ext === 'cts' ? '.cjs' : '.js');
   if (!fs.existsSync(runtime) || !samePath(real(runtime), runtime)) continue;
-  candidates.set(declaration, { root, runtime });
+  const perFile = syntax.filter(item => samePath(real(item.file.fileName), declaration));
+  // Treat declaration text as virtual TypeScript only for the specific
+  // ambient-initializer failure, never for arbitrary malformed declarations.
+  const virtual = perFile.some(item => item.code === 1039) && perFile.every(item => [1039, 1046].includes(item.code));
+  const virtualFile = declaration.replace(/\.d\.(mts|cts|ts)$/, '.$1');
+  if (virtual && fs.existsSync(virtualFile)) continue;
+  candidates.set(declaration, { root, runtime, virtual, virtualFile });
 }
 if (!candidates.size || !initial.length) {
   finish([], syntax.length ? ['No eligible adjacent JavaScript source for the reported declaration errors.'] : []);
@@ -67,6 +73,39 @@ for (const [declaration, { runtime }] of candidates) {
   generated.set(key(declaration), replacement);
 }
 
+// Re-emit the original declaration text as virtual TypeScript where it contains
+// only unsupported ambient initializers. This retains declaration-only exports
+// which cannot be reconstructed from JavaScript. The host never writes source.
+const virtualSources = new Map([...candidates].filter(([, value]) => value.virtual)
+  .map(([declaration, value]) => [key(value.virtualFile), fs.readFileSync(declaration, 'utf8')]));
+if (virtualSources.size) {
+  const virtualHost = ts.createCompilerHost(emitOptions);
+  const fileExists = virtualHost.fileExists.bind(virtualHost);
+  const readFile = virtualHost.readFile.bind(virtualHost);
+  const getSourceFile = virtualHost.getSourceFile.bind(virtualHost);
+  virtualHost.fileExists = file => virtualSources.has(key(file)) || fileExists(file);
+  virtualHost.readFile = file => virtualSources.get(key(file)) ?? readFile(file);
+  virtualHost.getSourceFile = (file, languageVersion, onError, shouldCreateNewSourceFile) => {
+    const text = virtualSources.get(key(file));
+    return text === undefined ? getSourceFile(file, languageVersion, onError, shouldCreateNewSourceFile) :
+      ts.createSourceFile(file, text, languageVersion, true, ts.getScriptKindFromFileName(file));
+  };
+  const virtualProgram = ts.createProgram([...candidates.values()].filter(value => value.virtual).map(value => value.virtualFile), emitOptions, virtualHost);
+  const diagnostics = ts.getPreEmitDiagnostics(virtualProgram);
+  if (diagnostics.length) reject('Declaration generation rejected: virtual source compilation reported errors.', diagnostics);
+  const virtualOutput = new Map();
+  const virtualEmit = virtualProgram.emit(undefined, (name, text, _bom, _onError, sourceFiles) => {
+    if (/\.d\.(?:ts|mts|cts)$/.test(name) && sourceFiles?.length === 1) virtualOutput.set(key(sourceFiles[0].fileName), text);
+  }, undefined, true);
+  if (virtualEmit.emitSkipped) reject('Declaration generation rejected: TypeScript skipped virtual source emit.', virtualEmit.diagnostics);
+  for (const [declaration, value] of candidates) {
+    if (!value.virtual) continue;
+    const replacement = virtualOutput.get(key(value.virtualFile));
+    if (!replacement) reject(`Declaration generation rejected: no declaration emitted for ${declaration}.`);
+    generated.set(key(declaration), replacement);
+  }
+}
+
 const host = ts.createCompilerHost(options);
 const originalRead = host.readFile.bind(host);
 const originalSource = host.getSourceFile.bind(host);
@@ -85,7 +124,7 @@ const exportsOf = (checker, file) => {
   const symbol = checker.getSymbolAtLocation(file);
   return symbol && checker.getExportsOfModule(symbol).map(x => x.name).sort();
 };
-for (const [declaration, { runtime }] of candidates) {
+for (const [declaration, { runtime, virtual }] of candidates) {
   const source = emitProgram.getSourceFile(runtime);
   // Preserve the filename spelling used by the consumer's program, which may be symlinked.
   const decl = fixed.getSourceFiles().find(file => samePath(real(file.fileName), declaration));
@@ -148,8 +187,12 @@ for (const [declaration, { runtime }] of candidates) {
       }
     }
   }
-  const jsExports = source && exportsOf(jsChecker, source);
-  const declarationExports = decl && exportsOf(fixedChecker, decl);
+  const valueExports = (checker, file) => {
+    const symbol = checker.getSymbolAtLocation(file);
+    return symbol && checker.getExportsOfModule(symbol).filter(item => actualFlags(checker, item) & ts.SymbolFlags.Value).map(item => item.name).sort();
+  };
+  const jsExports = source && (virtual ? valueExports(jsChecker, source) : exportsOf(jsChecker, source));
+  const declarationExports = decl && (virtual ? valueExports(fixedChecker, decl) : exportsOf(fixedChecker, decl));
   if (!jsExports || !declarationExports || JSON.stringify(jsExports) !== JSON.stringify(declarationExports)) {
     reject(`Declaration generation rejected: exports differ for ${runtime}.`);
   }

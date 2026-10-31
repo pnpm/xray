@@ -278,5 +278,28 @@
     ],
     "maxDiagnosticLines": 0,
     "evidence": "The exported parser subpath requires next/dist/compiled/babel/eslint-parser but next is absent from the package manifest."
+  },
+  {
+    "name": "@material/base",
+    "version": "14.0.0",
+    "url": "https://registry.npmjs.org/@material/base/-/base-14.0.0.tgz",
+    "sha512": "3aeeef4bb9f51f8635d0c519c9801bb7a1f4b7aedceaeaf1a0281e553eccdfc69095a354c0530e0e9eca4ff9b28d8cf66142df86edcfb5f495dd296d81a73d98",
+    "expected": [],
+    "maxFindings": 0,
+    "maxDiagnosticLines": 0,
+    "evidence": "Clean Sass control: shipped files use relative forwards and the built-in sass:list module, neither of which needs an npm dependency."
+  },
+  {
+    "name": "is-bun-module",
+    "version": "2.0.0",
+    "url": "https://registry.npmjs.org/is-bun-module/-/is-bun-module-2.0.0.tgz",
+    "sha512": "80d0866e79e79c501418a799f4f75bc9e19826a7b0a6673668a1d410c3b99d03d653d94e9afee3726408bfea870fc7d75ba5bba9fb82c17e2b63d2cd4635eb91",
+    "expected": [],
+    "expectedIncomplete": true,
+    "expectedDiagnostics": [
+      "dist/shared.d.ts"
+    ],
+    "maxDiagnosticLines": 1,
+    "evidence": "The published shared.d.ts includes ambient initializers rejected by TypeScript. The diagnostic is asserted without claiming the archive itself is valid."
   }
 ]

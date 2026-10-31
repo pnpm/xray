@@ -169,7 +169,9 @@ pnpm install
 
 This requires a local TypeScript installation and `tsconfig.json` in the target
 project. Xray emits declarations from the shipped JavaScript without executing
-it, checks that exported names match, and verifies the project in memory with
+it. For declaration files containing implementation initializers, it can instead
+re-emit the original text as virtual TypeScript source, preserving declaration-only
+types. It checks the existing export contract and verifies the project in memory with
 all declaration checking enabled. A candidate is rejected if any diagnostics
 remain; the reason is printed. Source files in the package store are untouched.
 

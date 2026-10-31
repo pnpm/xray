@@ -65,7 +65,9 @@ jobs:
     - name: Install declaration repair compiler
       run: pnpm --dir "${{ runner.temp }}/xray-smoke-deps" add --save-dev typescript@5.9.3 --ignore-scripts
     - name: Check cross-platform declaration repair
-      run: node corpus/path-test.mjs
+      run: |
+        node corpus/path-test.mjs
+        node --test corpus/regenerate-source.test.mjs
       env:
         XRAY_TYPESCRIPT: ${{ runner.temp }}/xray-smoke-deps/node_modules/typescript
 
@@ -213,8 +215,8 @@ jobs:
         version: 12.16.1
         runtime: node@24
         install: false
-    - run: cargo build --locked
+    - run: cargo build --locked --release
     - run: node --test corpus/*.test.mjs
-    - run: node corpus/run.mjs
-    - run: node corpus/install-test.mjs
-    - run: node corpus/safety-test.mjs
+    - run: node corpus/run.mjs target/release/xray
+    - run: node corpus/install-test.mjs target/release/xray
+    - run: node corpus/safety-test.mjs target/release/xray
