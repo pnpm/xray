@@ -11,7 +11,8 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     path::{Path, PathBuf},
-    process::{Command, ExitStatus},
+    process::ExitStatus,
+    sync::atomic::AtomicBool,
 };
 
 #[derive(Deserialize)]
@@ -56,6 +57,24 @@ pub fn status_code(status: ExitStatus) -> u8 {
 /// Run a command with the Node preload active. Its streams and exit status are
 /// unchanged. Every captured resolution failure may have been caught by code.
 pub fn run(command: &[OsString], packages: &[PathBuf], project: &Path) -> Result<TraceResult> {
+    run_inner(command, packages, project, None)
+}
+
+pub fn run_cancellable(
+    command: &[OsString],
+    packages: &[PathBuf],
+    project: &Path,
+    cancelled: &AtomicBool,
+) -> Result<TraceResult> {
+    run_inner(command, packages, project, Some(cancelled))
+}
+
+fn run_inner(
+    command: &[OsString],
+    packages: &[PathBuf],
+    project: &Path,
+    cancelled: Option<&AtomicBool>,
+) -> Result<TraceResult> {
     let (program, args) = command.split_first().context("--trace needs a command after --")?;
     let temp = tempfile::tempdir().context("creating trace directory")?;
     let hook = temp.path().join("hook.mjs");
@@ -74,13 +93,17 @@ pub fn run(command: &[OsString], packages: &[PathBuf], project: &Path) -> Result
         }
     }
     let owners = trace_owners(packages, &workspaces)?;
-    let status = Command::new(program)
+    let mut child = crate::process::command(program);
+    child
         .args(args)
         .current_dir(project)
         .env("NODE_OPTIONS", options)
-        .env("XRAY_TRACE_FILE", &events)
-        .status()
-        .context("starting traced command")?;
+        .env("XRAY_TRACE_FILE", &events);
+    let status = if let Some(flag) = cancelled {
+        crate::verify_signals::run(&mut child, flag)?
+    } else {
+        child.status().context("starting traced command")?
+    };
     let (reports, diagnostics) = reports_from_events(&std::fs::read_to_string(events)?, &owners)?;
     Ok(TraceResult { status, reports, diagnostics })
 }

@@ -4,6 +4,7 @@ mod configuration;
 mod declaration_patch;
 mod discovery;
 mod manifest;
+mod process;
 mod reachable;
 mod regenerate;
 mod repair;
@@ -13,6 +14,12 @@ mod report;
 mod scan;
 mod style;
 mod trace;
+mod verify;
+mod verify_candidates;
+mod verify_lease;
+mod verify_signals;
+mod verify_transaction;
+mod verify_types;
 mod workspace;
 
 #[cfg(test)]
@@ -24,7 +31,7 @@ use crate::{
     report::{Diagnostic, DiagnosticKind, PackageReport},
 };
 use anyhow::Result;
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
@@ -36,6 +43,8 @@ use std::{
 /// global virtual store they do not. This finds them before your users do.
 #[derive(Debug, Parser)]
 #[command(name = "xray", version)]
+#[command(group(ArgGroup::new("execution").args(["trace", "verify"])))]
+#[command(group(ArgGroup::new("repair_action").args(["fix", "verify"]).multiple(true)))]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "a flag is a bool; the lint is aimed at domain types, not an argument struct"
@@ -55,7 +64,7 @@ struct Args {
     json: bool,
 
     /// Exit 1 when undeclared dependencies remain, or 2 for an incomplete scan.
-    #[arg(long, conflicts_with_all = ["fix", "trace"])]
+    #[arg(long, conflicts_with_all = ["fix", "trace", "verify"])]
     check: bool,
 
     /// Emit version-scoped package extensions using publisher dependency ranges
@@ -80,21 +89,42 @@ struct Args {
 
     /// Propose pnpm patches for malformed declarations only when the local
     /// TypeScript compiler verifies the full project with no remaining errors.
-    #[arg(long, requires = "fix", conflicts_with = "trace")]
+    #[arg(long, requires = "repair_action", conflicts_with = "trace")]
     regenerate_types: bool,
+
+    /// Repair and reinstall until the command succeeds, minimize the retained
+    /// changes, and restore the original configuration and graph on failure.
+    /// The command may run repeatedly; installation follows existing pnpm policy.
+    #[arg(long, requires = "command", conflicts_with_all = ["package", "json", "package_extensions", "dry_run"])]
+    verify: bool,
+
+    /// Maximum verification attempts after the baseline command.
+    #[arg(long, requires = "verify", default_value_t = 32, value_parser = clap::value_parser!(u16).range(1..=256))]
+    verify_max_attempts: u16,
+
+    /// Maximum distinct proposals considered during a verified repair.
+    #[arg(long, requires = "verify", default_value_t = 32, value_parser = clap::value_parser!(u16).range(1..=256))]
+    verify_max_candidates: u16,
+
+    /// Restore a retained verification journal for the selected workspace.
+    #[arg(long, conflicts_with_all = ["verify", "trace", "fix", "dry_run", "regenerate_types", "package", "json", "package_extensions", "check", "all_files", "command"])]
+    recover: Option<PathBuf>,
 
     /// Observe failed Node module resolutions while running a command after --.
     /// Requires Node 22.15+; observations may be caught optional integrations.
     #[arg(long, requires = "command", conflicts_with_all = ["package", "json", "package_extensions", "all_files"])]
     trace: bool,
 
-    /// Command and arguments to execute with --trace.
-    #[arg(last = true, requires = "trace")]
+    /// Command and arguments to execute with --trace or --verify.
+    #[arg(last = true, requires = "execution")]
     command: Vec<OsString>,
 }
 
 fn main() -> Result<ExitCode> {
     let args = Args::parse();
+    if let Some(journal) = &args.recover {
+        return verify::recover(&args.path, journal);
+    }
     let packages =
         if args.package { vec![args.path.clone()] } else { installed_packages(&args.path)? };
     let workspace =
@@ -110,6 +140,9 @@ fn main() -> Result<ExitCode> {
         packages.clone()
     };
 
+    if args.verify {
+        return run_verified(&args, &workspace);
+    }
     if args.trace {
         return run_trace(&args, &workspace, &providers);
     }
@@ -190,6 +223,18 @@ fn main() -> Result<ExitCode> {
     print!("{rendered}");
 
     Ok(status)
+}
+
+fn run_verified(args: &Args, workspace: &Path) -> Result<ExitCode> {
+    verify::run(verify::Options {
+        project: &args.path,
+        workspace,
+        command: &args.command,
+        scope: if args.all_files { Scope::EveryFile } else { Scope::Declared },
+        regenerate_types: args.regenerate_types,
+        max_attempts: usize::from(args.verify_max_attempts),
+        max_candidates: usize::from(args.verify_max_candidates),
+    })
 }
 
 fn write_repairs(
