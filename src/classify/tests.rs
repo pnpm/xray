@@ -124,3 +124,50 @@ fn a_types_package_does_not_satisfy_a_runtime_reference() {
     );
     assert_eq!(missing_package(&requirement, Origin::Runtime, &declared(&["lodash"])), None);
 }
+
+#[test]
+fn a_types_reference_to_a_subpath_needs_only_its_package() {
+    let requirement = Requirement::TypesReference("vite/client".to_string());
+    assert_eq!(missing_package(&requirement, Origin::Types, &declared(&["vite"])), None);
+    assert_eq!(
+        missing_package(&requirement, Origin::Types, &declared(&[])),
+        Some("vite".to_string()),
+    );
+    let scoped = Requirement::TypesReference("@scope/lib/globals".to_string());
+    assert_eq!(missing_package(&scoped, Origin::Types, &declared(&["@scope/lib"])), None);
+}
+
+#[test]
+fn a_types_reference_can_name_the_types_package_itself() {
+    let requirement = Requirement::TypesReference("@types/node".to_string());
+    assert_eq!(missing_package(&requirement, Origin::Types, &declared(&["@types/node"])), None);
+    assert_eq!(
+        missing_package(&requirement, Origin::Types, &declared(&[])),
+        Some("@types/node".to_string()),
+    );
+}
+
+#[test]
+fn a_relative_types_reference_names_no_package() {
+    for reference in ["./x", "../types", "/abs/types"] {
+        let requirement = Requirement::TypesReference(reference.to_string());
+        assert_eq!(
+            missing_package(&requirement, Origin::Types, &declared(&[])),
+            None,
+            "{reference}"
+        );
+    }
+}
+
+#[test]
+fn path_aliases_are_not_package_names() {
+    for specifier in
+        ["@/components/x", "@/", "~/utils", "~", "_private", "@scope/.hidden", "@_x/y", "has space"]
+    {
+        assert_eq!(package_name(specifier), None, "{specifier}");
+    }
+    // Names published before npm tightened its rules stay valid.
+    assert_eq!(package_name("JSONStream"), Some("JSONStream"));
+    let style = Requirement::Style("@/styles/base".into(), crate::style::StyleKind::Use);
+    assert_eq!(missing_package(&style, Origin::Runtime, &declared(&[])), None);
+}
