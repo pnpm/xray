@@ -38,11 +38,11 @@ struct Args {
     package: bool,
 
     /// Report the findings as JSON.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "package_extensions")]
     json: bool,
 
-    /// Emit a `packageExtensions` block that declares every finding as an
-    /// optional peer dependency, ready to paste into pnpm-workspace.yaml.
+    /// Emit version-scoped package extensions using publisher dependency ranges
+    /// when available, and optional peers otherwise.
     #[arg(long)]
     package_extensions: bool,
 
@@ -59,9 +59,9 @@ fn main() -> Result<()> {
         if args.package { vec![args.path.clone()] } else { installed_packages(&args.path)? };
 
     let scope = if args.all_files { Scope::EveryFile } else { Scope::Declared };
-    let mut reports: Vec<PackageReport> =
+    let reports: Vec<PackageReport> =
         packages.iter().filter_map(|dir| analyze(dir, scope).transpose()).collect::<Result<_>>()?;
-    reports.sort_by(|a, b| a.package.cmp(&b.package));
+    let reports = report::merge_reports(reports);
 
     let rendered = if args.json {
         report::as_json(&reports)?

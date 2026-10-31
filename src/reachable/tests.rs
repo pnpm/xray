@@ -84,7 +84,7 @@ fn export_patterns_include_nested_matching_files() {
     let report = crate::analyze::analyze(&dir, crate::analyze::Scope::Declared).unwrap().unwrap();
     assert_eq!(
         report.findings.iter().map(|f| f.dependency.as_str()).collect::<Vec<_>>(),
-        ["missing-one", "missing-two"]
+        ["missing-one", "missing-two"],
     );
 }
 

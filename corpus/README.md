@@ -18,10 +18,28 @@ positive findings: they do not certify that every finding is actionable, that a
 suggested version is compatible, or that the emitted extension fixes a project.
 In particular, Docusaurus uses generated and bundler aliases; treating those as
 npm packages would generate false positives. Its published `.js` files also
-contain JSX, which some parser configurations reject. The corpus currently scans
-individual unpacked packages, not full monorepo installs under strict hoisting
-or a global virtual store. It is a starting point, not a representative measure
-of registry-wide coverage.
+contain JSX. The tarball checks scan individual packages and are a starting point,
+not a representative measure of registry-wide coverage.
 
 Add cases with a pinned tarball URL, verified digest, concrete evidence, and
 expected findings; avoid relying on `latest` or executing untrusted package code.
+
+## Installation regression
+
+The separate integration test requires pnpm and installs pinned registry packages
+with lifecycle scripts disabled in temporary workspaces. It runs TypeScript before
+and after applying xray's generated extension in both isolated and global virtual
+stores with hoisting disabled. It checks that the package physically lives outside
+the project in the global-store case. For the declaration case, the consumer does not declare the missing dependency,
+so success requires the extension to install and link it. A small ambient
+declaration isolates an unrelated optional pdfmake peer. For the runtime case,
+the consumer supplies pug and the generated optional peer makes it reachable
+from @vue/consolidate before a template is rendered.
+
+```sh
+cargo build
+node corpus/install-test.mjs
+```
+
+The integration test covers two known broken releases; it does not establish that
+all generated fixes are safe or that every registry package has been checked.

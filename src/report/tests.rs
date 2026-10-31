@@ -14,16 +14,13 @@ fn medplum() -> Vec<PackageReport> {
 }
 
 #[test]
-fn package_extensions_declare_an_optional_peer() {
+fn package_extensions_install_the_author_declared_dependency() {
     assert_eq!(
         as_package_extensions(&medplum()),
         "packageExtensions:\n  \
          '@medplum/core@5.1.15':\n    \
-         peerDependencies:\n      \
-         '@medplum/fhirtypes': '*'\n    \
-         peerDependenciesMeta:\n      \
-         '@medplum/fhirtypes':\n        \
-         optional: true\n",
+         dependencies:\n      \
+         '@medplum/fhirtypes': '5.1.15'\n",
     );
 }
 
@@ -34,11 +31,7 @@ fn package_extensions_parse_as_yaml() {
     let rendered = as_package_extensions(&medplum());
     let parsed = YamlLoader::load_from_str(&rendered).expect("emitted invalid YAML");
     let extensions = &parsed[0]["packageExtensions"]["@medplum/core@5.1.15"];
-    assert_eq!(extensions["peerDependencies"]["@medplum/fhirtypes"].as_str(), Some("*"));
-    assert_eq!(
-        extensions["peerDependenciesMeta"]["@medplum/fhirtypes"]["optional"].as_bool(),
-        Some(true),
-    );
+    assert_eq!(extensions["dependencies"]["@medplum/fhirtypes"].as_str(), Some("5.1.15"));
 }
 
 #[test]
@@ -67,11 +60,11 @@ fn versions_are_separate_and_repeated_peer_contexts_are_merged() {
     let extensions = &parsed[0]["packageExtensions"];
     assert_eq!(
         extensions["@medplum/core@5.1.15"]["peerDependencies"]["another"].as_str(),
-        Some("*")
+        Some("*"),
     );
     assert_eq!(
-        extensions["@medplum/core@5.1.15"]["peerDependencies"]["@medplum/fhirtypes"].as_str(),
-        Some("*")
+        extensions["@medplum/core@5.1.15"]["dependencies"]["@medplum/fhirtypes"].as_str(),
+        Some("5.1.15"),
     );
     assert_eq!(extensions["@medplum/core@6.0.0"]["peerDependencies"]["third"].as_str(), Some("*"));
 }
@@ -104,4 +97,57 @@ fn text_separates_the_two_kinds_of_finding() {
     let rendered = as_text(&reports);
     assert!(rendered.contains("known — declared as a devDependency, used in types"), "{rendered}");
     assert!(rendered.contains("unknown — not in the manifest at all, used in code"), "{rendered}");
+}
+
+#[test]
+fn publisher_local_ranges_are_not_copied_to_consumers() {
+    for range in
+        ["workspace:*", "file:../helper", "link:../helper", "github:example/helper", "../helper"]
+    {
+        let reports = vec![PackageReport {
+            package: "example@1.0.0".into(),
+            findings: vec![Finding {
+                dependency: "helper".into(),
+                declared_range: Some(range.into()),
+                severity: Severity::DevDependency,
+                origin: Origin::Runtime,
+            }],
+        }];
+        let rendered = as_package_extensions(&reports);
+        let parsed = YamlLoader::load_from_str(&rendered).unwrap();
+        assert_eq!(
+            parsed[0]["packageExtensions"]["example@1.0.0"]["peerDependencies"]["helper"].as_str(),
+            Some("*"),
+        );
+        assert!(!rendered.contains(range));
+    }
+}
+
+#[test]
+fn peer_context_duplicates_merge_origins_without_losing_findings() {
+    let reports = vec![
+        PackageReport {
+            package: "example@1.0.0".into(),
+            findings: vec![Finding {
+                dependency: "helper".into(),
+                declared_range: Some("^1".into()),
+                severity: Severity::DevDependency,
+                origin: Origin::Types,
+            }],
+        },
+        PackageReport {
+            package: "example@1.0.0".into(),
+            findings: vec![Finding {
+                dependency: "helper".into(),
+                declared_range: Some("^1".into()),
+                severity: Severity::DevDependency,
+                origin: Origin::Runtime,
+            }],
+        },
+    ];
+    let merged = crate::report::merge_reports(reports);
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0].findings.len(), 1);
+    assert_eq!(merged[0].findings[0].origin, Origin::Both);
+    assert_eq!(merged[0].findings[0].declared_range.as_deref(), Some("^1"));
 }

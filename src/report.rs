@@ -1,10 +1,7 @@
 use crate::scan::Origin;
 use anyhow::Result;
 use serde::Serialize;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt::Write as _,
-};
+use std::{collections::BTreeMap, fmt::Write as _};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,6 +30,32 @@ pub struct Finding {
 pub enum Severity {
     DevDependency,
     Undeclared,
+}
+
+/// Collapse repeated installations (for example different peer contexts) while
+/// retaining every dependency and both runtime/type origins.
+pub fn merge_reports(reports: Vec<PackageReport>) -> Vec<PackageReport> {
+    let mut packages: BTreeMap<String, BTreeMap<String, Finding>> = BTreeMap::new();
+    for report in reports {
+        let dependencies = packages.entry(report.package).or_default();
+        for finding in report.findings {
+            if let Some(existing) = dependencies.get_mut(&finding.dependency) {
+                existing.origin = existing.origin.merged(finding.origin);
+                if existing.declared_range != finding.declared_range {
+                    existing.declared_range = None;
+                }
+            } else {
+                dependencies.insert(finding.dependency.clone(), finding);
+            }
+        }
+    }
+    packages
+        .into_iter()
+        .map(|(package, findings)| PackageReport {
+            package,
+            findings: findings.into_values().collect(),
+        })
+        .collect()
 }
 
 pub fn as_json(reports: &[PackageReport]) -> Result<String> {
@@ -74,27 +97,54 @@ pub fn as_package_extensions(reports: &[PackageReport]) -> String {
     // The same version can occur more than once with different peer contexts.
     // Merge those reports, and keep versions separate so a fix for one release
     // does not silently change every other release of the package.
-    let mut extensions: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut extensions: BTreeMap<&str, BTreeMap<&str, Option<&str>>> = BTreeMap::new();
     for report in reports {
-        extensions
-            .entry(&report.package)
-            .or_default()
-            .extend(report.findings.iter().map(|finding| finding.dependency.as_str()));
+        let dependencies = extensions.entry(&report.package).or_default();
+        for finding in &report.findings {
+            let range = finding
+                .declared_range
+                .as_deref()
+                .filter(|range| finding.origin == Origin::Types && registry_range(range));
+            dependencies
+                .entry(&finding.dependency)
+                .and_modify(|existing| {
+                    if *existing != range {
+                        *existing = None;
+                    }
+                })
+                .or_insert(range);
+        }
     }
     let mut out = String::from("packageExtensions:\n");
     for (package, dependencies) in extensions {
         let package = package.replace('\'', "''");
         let _ = writeln!(out, "  '{package}':");
-        let _ = writeln!(out, "    peerDependencies:");
-        for dependency in &dependencies {
-            let dependency = dependency.replace('\'', "''");
-            let _ = writeln!(out, "      '{dependency}': '*'");
+        if dependencies.values().any(Option::is_some) {
+            let _ = writeln!(out, "    dependencies:");
+            for (dependency, range) in &dependencies {
+                if let Some(range) = range {
+                    let dependency = dependency.replace('\'', "''");
+                    let range = range.replace('\'', "''");
+                    let _ = writeln!(out, "      '{dependency}': '{range}'");
+                }
+            }
         }
-        let _ = writeln!(out, "    peerDependenciesMeta:");
-        for dependency in &dependencies {
-            let dependency = dependency.replace('\'', "''");
-            let _ = writeln!(out, "      '{dependency}':");
-            let _ = writeln!(out, "        optional: true");
+        if dependencies.values().any(Option::is_none) {
+            let _ = writeln!(out, "    peerDependencies:");
+            for (dependency, range) in &dependencies {
+                if range.is_none() {
+                    let dependency = dependency.replace('\'', "''");
+                    let _ = writeln!(out, "      '{dependency}': '*'");
+                }
+            }
+            let _ = writeln!(out, "    peerDependenciesMeta:");
+            for (dependency, range) in &dependencies {
+                if range.is_none() {
+                    let dependency = dependency.replace('\'', "''");
+                    let _ = writeln!(out, "      '{dependency}':");
+                    let _ = writeln!(out, "        optional: true");
+                }
+            }
         }
     }
     out
@@ -102,3 +152,10 @@ pub fn as_package_extensions(reports: &[PackageReport]) -> String {
 
 #[cfg(test)]
 mod tests;
+
+/// Only portable registry ranges can be copied from a publisher's build setup.
+/// Local paths and workspace protocols refer to the publisher's checkout.
+fn registry_range(range: &str) -> bool {
+    !range.is_empty()
+        && range.chars().all(|ch| ch.is_ascii_digit() || "vVxX*^~<>=|.-+ ".contains(ch))
+}

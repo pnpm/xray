@@ -58,8 +58,9 @@ xray --json
 
 ## Fixing what it finds
 
-`--package-extensions` emits a ready-to-paste block that declares each finding as
-an optional peer dependency:
+`--package-extensions` emits a ready-to-paste block. When the publisher listed
+a portable version range in devDependencies for a type-only reference, it adds
+that dependency:
 
 ```sh
 xray --package-extensions
@@ -68,11 +69,8 @@ xray --package-extensions
 ```yaml
 packageExtensions:
   '@medplum/core@5.1.15':
-    peerDependencies:
-      '@medplum/fhirtypes': '*'
-    peerDependenciesMeta:
-      '@medplum/fhirtypes':
-        optional: true
+    dependencies:
+      '@medplum/fhirtypes': '5.1.15'
 ```
 
 Adding that to `pnpm-workspace.yaml` makes pnpm link the dependency inside the
@@ -80,14 +78,16 @@ package's own directory, so it resolves for every tool — the compiler, bundler
 and Node alike — rather than only for the ones that read `tsconfig.json`.
 
 The selector is pinned to the affected package version. Findings from multiple
-installations of that version are combined. Review the suggestions: an optional
-peer links a dependency only when it is already available; it does not install
-one. Some references are optional integrations or build artifacts and need no
-extension.
+installations of that version are combined. Review the suggestions: references
+can be optional integrations or build artifacts. Portable publisher ranges are
+used to install missing type dependencies. Runtime imports remain optional
+peers because a publisher may support many optional integrations. Local paths and workspace protocols
+cannot be reused outside the publisher's checkout.
 
-The peer range is `'*'` on purpose. The goal is to make a package that is already
-installed reachable, not to constrain which version gets picked; a narrower range
-would only produce unmet-peer warnings without preventing anything.
+When no portable range is available, the output uses an optional peer with range
+`'*'`. This links a dependency only when it is already available; it does not
+install one. Those suggestions require review and a suitable version supplied by
+the consumer.
 
 ## What it reports
 

@@ -46,9 +46,11 @@ pub struct Manifest {
 // npm also accepts `bundleDependencies: true`, meaning all dependencies are
 // bundled, and `false`, meaning none are. Both are already accounted for by
 // the dependency maps; only an explicit list contributes additional names.
-fn deserialize_bundled<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+fn deserialize_bundled<'de, Deserializer>(
+    deserializer: Deserializer,
+) -> Result<Vec<String>, Deserializer::Error>
 where
-    D: serde::Deserializer<'de>,
+    Deserializer: serde::Deserializer<'de>,
 {
     #[derive(Deserialize)]
     #[serde(untagged)]

@@ -41,6 +41,14 @@ fn a_scope_on_its_own_is_not_a_package() {
 }
 
 #[test]
+fn prefix_only_node_builtins_do_not_mask_bare_npm_packages() {
+    for name in ["test", "sqlite", "sea"] {
+        assert_eq!(package_name(name), Some(name));
+        assert_eq!(package_name(&format!("node:{name}")), None);
+    }
+}
+
+#[test]
 fn maps_a_name_to_its_types_package() {
     assert_eq!(types_package("node"), "@types/node");
     assert_eq!(types_package("@medplum/core"), "@types/medplum__core");

@@ -66,8 +66,21 @@ fn collects_triple_slash_type_references() {
 
 #[test]
 fn reports_files_it_cannot_parse() {
-    let source = "export =       function broken(): void;";
+    let source = "export const = ;";
     assert!(specifiers(source, Path::new("index.d.ts")).is_err());
+}
+
+#[test]
+fn reads_declaration_with_export_assignment_function_signature() {
+    let source =
+        "import type { T } from 'needed';\nexport =       function remapping(input: T): T;\n";
+    assert_eq!(script(source, "index.d.cts"), ["needed"]);
+}
+
+#[test]
+fn reads_jsx_in_js_files() {
+    let source = "import Widget from 'widget'; export default () => <Widget />;";
+    assert_eq!(script(source, "index.js"), ["widget"]);
 }
 
 fn script(source: &str, name: &str) -> Vec<String> {
@@ -106,11 +119,38 @@ fn a_computed_require_names_no_package() {
 }
 
 #[test]
-fn a_local_binding_named_require_is_still_read_as_one() {
-    // Distinguishing a shadowed `require` needs scope analysis the scanner does
-    // not do; the cost is a rare extra finding, not a missed one.
-    let source = r"function f(require) { return require('shadowed'); }";
-    assert_eq!(script(source, "index.js"), ["shadowed"]);
+fn a_local_binding_named_require_is_not_a_node_import() {
+    let source = r"require('global'); function f(require) { return require('shadowed'); } { const require = x; require('also-shadowed'); }";
+    assert_eq!(script(source, "index.js"), ["global"]);
+}
+
+#[test]
+fn create_require_bindings_are_node_imports() {
+    let source = r"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url); require('loaded'); require.resolve('resolved');";
+    assert_eq!(script(source, "index.mjs"), ["loaded", "node:module", "resolved"]);
+}
+
+#[test]
+fn aliases_of_create_require_and_its_result_are_node_imports() {
+    for source in [
+        "import { createRequire as makeLoader } from 'node:module'; const load = makeLoader(import.meta.url); load('loaded');",
+        "const { createRequire: makeLoader } = require('node:module'); const load = makeLoader(__filename); load('loaded');",
+    ] {
+        assert_eq!(script(source, "index.js"), ["loaded", "node:module"]);
+    }
+}
+
+#[test]
+fn triple_slash_text_inside_a_block_comment_is_not_a_reference() {
+    let source =
+        "/*\n/// <reference types=\"fake\" />\n*/\n/// <reference types=\"real\" />\nexport {};";
+    assert_eq!(found(source), [Requirement::TypesReference("real".to_string())]);
+}
+
+#[test]
+fn normalization_does_not_scan_comment_content_as_code() {
+    let source = "/*\nexport = function pretend(): void;\nimport 'fake';\n*/\nimport 'real';\nexport = function actual(): void;";
+    assert_eq!(script(source, "index.d.cts"), ["real"]);
 }
 
 #[test]

@@ -4,7 +4,14 @@
     "version": "5.2.13",
     "url": "https://registry.npmjs.org/@medplum/core/-/core-5.2.13.tgz",
     "sha512": "880721177d05eb3fa2cb3ab15387311b6e957fb8e5b8c89cd637208f2390ff0742906f2e9f1d80767e41dc422cd60ba64695cf0e4aa0a1f9cfa34ca17990b9a9",
-    "expected": [{ "dependency": "@medplum/fhirtypes", "severity": "devDependency", "origin": "types", "declaredRange": "5.2.13" }],
+    "expected": [
+      {
+        "dependency": "@medplum/fhirtypes",
+        "severity": "devDependency",
+        "origin": "types",
+        "declaredRange": "5.2.13"
+      }
+    ],
     "evidence": "The published declaration files import @medplum/fhirtypes, but the published manifest lists it only in devDependencies."
   },
   {
@@ -12,7 +19,29 @@
     "version": "3.10.2",
     "url": "https://registry.npmjs.org/@docusaurus/core/-/core-3.10.2.tgz",
     "sha512": "1180728fa9e4f9a0fd29e57157a1e6a36fe70004fbf4fdb563cdb271304e06dae6aa2965a086c812180bdbff17a6dd89cffa6036a1c0c32bac386c266ca78998",
-    "expected": [{ "dependency": "@docusaurus/types", "severity": "devDependency", "origin": "types", "declaredRange": "3.10.2" }],
+    "expected": [
+      {
+        "dependency": "@docusaurus/types",
+        "severity": "devDependency",
+        "origin": "types",
+        "declaredRange": "3.10.2"
+      }
+    ],
     "evidence": "Published declarations import @docusaurus/types, which is listed only in devDependencies. This package also exercises generated and bundler aliases and JSX in .js files."
+  },
+  {
+    "name": "@vue/consolidate",
+    "version": "1.0.0",
+    "url": "https://registry.npmjs.org/@vue/consolidate/-/consolidate-1.0.0.tgz",
+    "sha512": "a13c9413e4072332f0d8fa55d78183fdcec4a210f23fae310a78964dca9c1264ddebdf5e16a4c8c0e9ad0d88dc3b58f7420757a091285afd7f70274bad1a0e7e",
+    "expected": [
+      {
+        "dependency": "pug",
+        "severity": "devDependency",
+        "origin": "runtime",
+        "declaredRange": "^3.0.0"
+      }
+    ],
+    "evidence": "The pug render adapter requires pug at runtime, but pug appears only in devDependencies."
   }
 ]
