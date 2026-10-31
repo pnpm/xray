@@ -10,7 +10,8 @@ fn metadata(root: &Path, content: &str) {
 #[test]
 fn detects_resolution_changes_but_not_build_metadata() {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
+    let canonical = temp.path().canonicalize().unwrap();
+    let root = canonical.as_path();
     let store = root.join("store");
     std::fs::create_dir_all(&store).unwrap();
     let first = format!("nodeLinker: isolated\nstoreDir: '{}'\nvirtualStoreDir: .pnpm\npublicHoistPattern: []\npendingBuilds: [first]\n", store.display());
@@ -40,15 +41,17 @@ fn detects_resolution_changes_but_not_build_metadata() {
 #[test]
 fn refuses_missing_or_invalid_metadata() {
     let temp = tempfile::tempdir().unwrap();
-    assert!(Layout::capture(temp.path()).is_err());
-    metadata(temp.path(), "nodeLinker: isolated\n");
-    assert!(Layout::capture(temp.path()).is_err());
+    let canonical = temp.path().canonicalize().unwrap();
+    assert!(Layout::capture(&canonical).is_err());
+    metadata(&canonical, "nodeLinker: isolated\n");
+    assert!(Layout::capture(&canonical).is_err());
 }
 
 #[test]
 fn preflight_rejects_cli_only_global_and_hoist_settings() {
     let temp = tempfile::tempdir().unwrap();
-    let root = temp.path();
+    let canonical = temp.path().canonicalize().unwrap();
+    let root = canonical.as_path();
     let store = root.join("store");
     std::fs::create_dir_all(store.join("links")).unwrap();
     let content = format!(
@@ -78,4 +81,18 @@ fn preflight_rejects_cli_only_global_and_hoist_settings() {
         12
     )
     .unwrap_or(false));
+}
+
+#[test]
+fn pnpm_nine_uses_its_default_public_hoist_patterns() {
+    let temp = tempfile::tempdir().unwrap();
+    let canonical = temp.path().canonicalize().unwrap();
+    let root = canonical.as_path();
+    let store = root.join("store");
+    std::fs::create_dir_all(&store).unwrap();
+    metadata(root, &format!("nodeLinker: isolated\nstoreDir: '{}'\nvirtualStoreDir: .pnpm\nhoistPattern: ['*']\npublicHoistPattern: ['*eslint*', '*prettier*']\n", store.display()));
+    let layout = Layout::capture(root).unwrap();
+    let signature = layout.modules.get(root).unwrap().as_ref().unwrap();
+    assert!(matches_configuration(signature, &serde_json::json!({}), &store, root, 9).unwrap());
+    assert!(!matches_configuration(signature, &serde_json::json!({}), &store, root, 10).unwrap());
 }
