@@ -103,6 +103,44 @@ include a filename and specifier; static findings also have line and column.
 
 ## Fixing what it finds
 
+To verify repairs against a failing, repeatable command:
+
+```sh
+xray --verify -- pnpm test
+xray --verify --regenerate-types -- pnpm exec tsc --noEmit
+```
+
+Xray first runs the command unchanged. If it fails, xray tries individual
+repairs, runs `pnpm install` under the existing project policies, and reruns
+the command. It checks each retained proposal for necessity and verifies the
+final installed graph again. An already successful command leaves settings
+unchanged. The compiler can also identify a missing installed `@types` provider
+when a package already declares its untyped runtime dependency.
+
+Verification requires existing pnpm lockfiles. Unsuccessful searches restore
+workspace settings, root and importer locks, generated patches, and the locked
+dependency graph, returning the original command's failure status. User edits
+to managed files are preserved as conflicts. Interruptions stop the command's
+process group before rollback and return status 130. Processes which detach
+from that group require their own cleanup.
+
+The command may run repeatedly. Installation follows existing lifecycle-script
+and trust policies; command and lifecycle outputs outside the managed files
+remain. Search defaults to 32 proposals and 32 verification attempts; adjust
+`--verify-max-candidates` and `--verify-max-attempts` to change those limits.
+
+A recovery journal is persisted before mutation. If rollback encounters an edit
+or installation failure, xray retains that journal and prints its location:
+
+```sh
+xray /path/to/workspace --recover /path/to/xray-recovery-directory
+```
+
+Recovery checks recorded file states before replacing anything and refuses to
+overwrite intervening edits. A crash during an uncheckpointed write can require
+manual reconciliation using the saved original bytes. Journals cannot be
+recovered while an active verification process holds their lease.
+
 Preview selected repairs, apply them, then let pnpm update its lockfile and links:
 
 ```sh
@@ -191,7 +229,10 @@ Verified changes are saved as reviewable files under `patches/` and referenced
 by `patchedDependencies`. An initial incomplete scan still exits 2 until the
 patch is installed. Regeneration is intentionally opt-in: it cannot infer a
 correct declaration from every broken package or reconcile every compiler and
-type-provider version.
+type-provider version. Composite project references are checked in their own
+compiler contexts, including every transitive project and the repaired outputs
+seen by dependents. Missing, stale, or out-of-project build outputs require a
+rebuild before regeneration can be verified.
 
 ## What it reports
 

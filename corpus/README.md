@@ -125,3 +125,13 @@ installed target identity and that its real path is outside the project. Output
 marks that archive `sha512_verified`; provider pins remain metadata-only.
 Independently review the case and provider before adding it to the verified
 corpus. The verifier never edits `packages.json`.
+
+## Verified command loop
+
+`node corpus/verify-loop.mjs` exercises `--verify` in isolated and global virtual
+stores. It includes actual consumer commands for the declared-runtime/missing-
+types case in `@vercel/sandbox` and a public Docusaurus deep declaration, in
+addition to runtime, rollback, recovery, cancellation, and separate-lockfile
+checks. The Docusaurus case installs a large dependency graph and can take
+several minutes. These tests run the explicitly provided consumer commands;
+fixture workspaces set `ignoreScripts: true` for pnpm installs.

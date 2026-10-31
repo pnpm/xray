@@ -329,5 +329,49 @@
     ],
     "maxDiagnosticLines": 1,
     "evidence": "The published declaration ends with a stray bare identifier rejected in ambient contexts. Repair must preserve the rest of the declaration."
+  },
+  {
+    "name": "faker",
+    "version": "5.5.3",
+    "url": "https://registry.npmjs.org/faker/-/faker-5.5.3.tgz",
+    "sha512": "c0b4efd9adbcc235325a46e75fbbbf0016419149081767c277bdd5e8fda816a106124b437f35b1e14c6b4aab4f470d313d101c8de00e222256a999b7a4fe2ede",
+    "expected": [],
+    "maxFindings": 0,
+    "maxDiagnosticLines": 0,
+    "evidence": "Published locale files include ISO-8859-1 bytes; their valid source must be scanned without a UTF-8 read diagnostic."
+  },
+  {
+    "name": "@picocss/pico",
+    "version": "1.5.10",
+    "url": "https://registry.npmjs.org/@picocss/pico/-/pico-1.5.10.tgz",
+    "sha512": "f8b69f32caf03f15d0324eac23ffff4e64889c2c30666abe2bb4a29322f737fe06861c33c8f0be4d02d412a9ab2f28e5b91fae22914572a8edcb7d11b6be86c5",
+    "expected": [],
+    "maxFindings": 0,
+    "maxDiagnosticLines": 0,
+    "evidence": "Shipped Sass uses interpolated quoted data URLs in its themes; these must parse without invented package references."
+  },
+  {
+    "name": "@sidvind/better-ajv-errors",
+    "version": "0.6.10",
+    "url": "https://registry.npmjs.org/@sidvind/better-ajv-errors/-/better-ajv-errors-0.6.10.tgz",
+    "sha512": "bcfbfc92ce89d4a416d4b3d88319803717079e213a2c5b9e931369728514928b49dacaf13f8a9767ecbdaa9a392c05e19cba0d3f4007f1c9e29e298aebc812e8",
+    "expected": [],
+    "notExpected": [
+      "./types"
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "Published Flow-comment syntax in lib/modern/utils.js includes a relative ./types import and must parse without a diagnostic. Other shipped test-file findings are not labeled as actionable."
+  },
+  {
+    "name": "@vercel/sandbox",
+    "version": "1.8.0",
+    "url": "https://registry.npmjs.org/@vercel/sandbox/-/sandbox-1.8.0.tgz",
+    "sha512": "49b5e483c166a7c8be23d21dc83e0f00056dc4cfca4b850b5787a211f63ff6d69bd4017530fbe6100f3f79bbc29fb41359043bb70c2da493523e551598e069df",
+    "expected": [],
+    "notExpected": [
+      "ms"
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The manifest declares runtime ms, so static phantom-dependency analysis must not report ms. Strict TypeScript can still require an installed @types/ms provider; the verified command test covers that separate defect."
   }
 ]

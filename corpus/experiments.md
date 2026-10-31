@@ -374,3 +374,129 @@ disabled reinstall. This validates that specific human patch, not a general
 rule for automatically deleting malformed declaration text. Tarball:
 `https://registry.npmjs.org/v8-compile-cache-lib/-/v8-compile-cache-lib-3.0.1.tgz`,
 integrity `sha512-wa7YjyUGfNZngI/vtK0UHAN+lgDCxBPCylVXGp0zu59Fz5aiGtNXaq3DhIov063MorB+VfufLh3JlF2KdTK3xg==`.
+
+## Next.js: focused ESLint workspace and declaration probe
+
+Next.js checkout `fac5fc87df2b60169189ac6dcba3142854124371` was tested in
+separate disposable worktrees with Node 20.20.2 and pnpm 12.9.1. Both installs
+used the unmodified repository security settings, the frozen lockfile, scripts
+disabled, `--filter 'eslint-config-next...'`, and `--config.hoist=false`.
+One used `--config.enable-global-virtual-store=false`, the other `true`. The
+filter included two of 38 workspace projects, plus the root dependencies pnpm
+installed. Package realpaths confirmed the two different store locations.
+
+Initially the config package's `types` script failed because the linked
+`@next/eslint-plugin-next` workspace had not been built with scripts disabled.
+After installing the workspace dependency closure and explicitly building that
+workspace (`pnpm --filter @next/eslint-plugin-next run build`), its build and
+`pnpm --filter eslint-config-next run types` both passed in each layout. A
+focused ESLint API check using the built workspace plugin also passed in both:
+its `no-typos` rule flagged `getStaticPathss`. The repository's focused Jest
+command could not start because the much larger `packages/next/dist/build/jest`
+workspace build was absent; that is a workspace setup limitation, not an npm
+package failure. These checks do not establish that the full Next.js build or
+full test suite works.
+
+The strict declaration probe imported the *installed registry package*
+`@eslint-community/eslint-utils@4.9.1` from the plugin workspace and ran:
+
+```sh
+./node_modules/.bin/tsc --ignoreConfig --noEmit --module nodenext \\
+  --moduleResolution nodenext --target es2022 --types node \\
+  packages/eslint-plugin-next/xray-probe.ts
+```
+
+The probe was `import * as utils from '@eslint-community/eslint-utils'; void utils;`.
+With `skipLibCheck` not enabled, both store layouts failed with TS2307 for
+`estree` from that published package's `index.d.ts`. Xray's package scan
+reported its dev-only `@types/estree` reference and produced an exact
+`@eslint-community/eslint-utils@4.9.1` extension adding `@types/estree` with
+the publisher's `^1.0.7` range. In each disposable worktree that generated
+entry was merged into the existing `packageExtensions`, then the same filtered
+install was repeated with scripts disabled and `--no-frozen-lockfile` to update
+the lockfile. The identical probe then passed in both layouts. This proves the
+specific declaration resolution and repair, not the usability of every xray
+finding or the entire project.
+
+Before the targeted extension, project-wide JSON scans reported 2,187 packages
+and 910 findings in 400 package reports for the local store, versus 2,188 and
+the same finding/report counts for the global store. Both reported incomplete
+analysis with eight diagnostics, including malformed declarations in
+`is-bun-module@2.0.0`, non-UTF-8 source in `faker@5.5.3`, and stylesheet and
+Flow parse diagnostics. These are raw observations, not confirmed package
+failures or verified fixes; some entries are shipped test or tooling files.
+
+After parser compatibility changes, the two Next worktrees were restored to the
+checkout's original workspace settings and lockfile and reinstalled frozen with
+scripts disabled and the same layout flags. Repeating the scans reduced the
+diagnostic count from eight to three in each layout. The remaining diagnostics
+were `is-bun-module@2.0.0`'s malformed published declaration,
+`lost@8.3.1`'s documentation Sass file with Jekyll front matter, and
+`protobufjs@6.11.2`'s JavaScript wrapper template containing placeholders.
+The latter two are tooling or documentation inputs, not confirmed executable
+consumer failures. Both scans remained incomplete. The local/global package
+counts remained 2,187/2,188, with 400 package reports and 910 raw findings in
+each; comparing package, dependency and origin sets showed no change. This is
+a reduction in parse diagnostics, not evidence of improved precision.
+
+## Next.js asset diagnostics and an entry-only scope experiment
+
+Two of the three remaining Next.js scan diagnostics were investigated in the
+published tarballs. `lost@8.3.1` has no `exports` map, declares `lost.js` as
+its main entry, and that entry loads its PostCSS implementation from `lib/`.
+The reported `docs/css/main.scss` begins with Jekyll `---` front matter and
+is documentation input; it is not imported by that main entry. Because there
+is no exports map, consumers can still address arbitrary shipped subpaths, so
+this observation does **not** prove every consumer or tool ignores that file.
+`protobufjs@6.11.2`'s `cli/wrappers/es6.js` contains literal `$DEPENDENCY` and
+`$OUTPUT` placeholders. Its CLI `cli/util.js` reads wrapper files as text with
+`fs.readFileSync` and substitutes those placeholders. It is a CLI template, not
+a JavaScript module imported by that path. The template is nevertheless used as
+data by the CLI; it should not simply be discarded as unused content.
+
+In an isolated two-package probe pointing at those installed packages, ordinary
+`--json` and `--json --all-files` both reported the two parse diagnostics.
+`--fix --dry-run` excluded the protobuf wrapper from its entry graph, but still
+reported the `lost` documentation stylesheet: for packages without an exports
+map, the repair graph intentionally treats all stylesheets as potentially public
+subpaths. Other installed dependencies were reachable in this probe; its raw
+finding count is not a two-package precision measure.
+
+To evaluate a possible scope change **without changing xray's source**, a local
+temporary build used the existing non-strict repair entry graph for default
+read-only analysis. Explicit `--all-files` behavior was left unchanged. On the
+frozen twelve-package label set, both current and experimental defaults detected
+all ten reviewed positive references with zero false positives on the six clean
+controls; unknown extra findings dropped from three to one. Both were complete.
+The development corpus passed its expected assertions under this variant; it
+lost five findings from shipped JSS test files, one from a Material test file,
+one from an AJV test helper, and 30 Docusaurus findings, most involving
+Docusaurus-generated or theme aliases. These labels are not exhaustive. On the
+same restored Next local-store graph, the variant reported 256 raw findings in
+175 package reports rather than 910 in 400, and two diagnostics instead of
+three: the protobuf template disappeared, but `lost` and `is-bun-module`
+remained. These counts measure a scope reduction, not improved precision.
+
+There is a concrete cost to making that graph the default for packages without
+an exports map. `@docusaurus/core@3.10.2` publishes
+`lib/client/ClientLifecyclesDispatcher.d.ts`, which imports undeclared `history`
+and is used by its `PendingNavigation.js` client module. A strict global-store
+consumer importing the public deep path
+`@docusaurus/core/lib/client/ClientLifecyclesDispatcher.js` produced TS2307 for
+`history`, even though the consumer installed `history@5.3.0`. Adding an
+optional `history` peer extension removed that particular error after reinstall;
+an unrelated missing `@docusaurus/types` error remained. Current default analysis
+reports `history`, while the experimental entry-only default misses it. This
+is a real limitation of using the main-entry graph as a completeness claim for
+unencapsulated packages.
+
+A safer direction is to retain the public deep-path analysis and represent an
+explicit, user-selected entry-only scope as incomplete coverage, while improving
+format-aware parsing for recognized asset syntax. For example, a Sass parser
+could recognize a bounded Jekyll front-matter block while preserving source
+locations. Template handling would need evidence that the content is a template
+or a user-specified rule; a `docs` or `templates` path alone is not proof that
+a consumer cannot use it. Unknown malformed files should continue to surface
+rather than silently making a package clean. Any change needs tests for public
+subpaths, wildcard exports, bins and declaration companions; `--all-files` should
+continue to expose assets and diagnostics.
