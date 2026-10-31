@@ -8,6 +8,7 @@ import test from 'node:test'
 
 const bridge = new URL('../src/flow_bridge.js', import.meta.url)
 const parser = fileURLToPath(new URL('../vendor/flow-parser/flow_parser.js', import.meta.url))
+const hooksSupported = spawnSync(process.execPath, ['-e', "process.exit(typeof require('node:module').registerHooks === 'function' ? 0 : 1)"]).status === 0
 
 test('the supported Node floor executes the actual bundled Flow bridge without running source', async () => {
   const script = await readFile(bridge, 'utf8')
@@ -35,10 +36,26 @@ test('trace preload preserves child status on supported and older Node versions'
     assert.equal(traced.status, baseline.status)
     assert.equal(traced.stdout, baseline.stdout)
     assert.equal(await readFile(events, 'utf8'), '')
-    const supported = spawnSync(process.execPath, ['-e', "process.exit(typeof require('node:module').registerHooks === 'function' ? 0 : 1)"]).status === 0
-    if (supported) assert.equal(traced.stderr, baseline.stderr)
+    if (hooksSupported) assert.equal(traced.stderr, baseline.stderr)
     else assert.match(traced.stderr, /requires Node.js 22.15 or newer/)
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test('trace distinguishes custom search paths from ordinary lookup failures', { skip: !hooksSupported }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'xray-node-resolver-'))
+  try {
+    const events = join(root, 'events.jsonl')
+    const script = join(root, 'fixture.cjs')
+    await writeFile(events, '')
+    await writeFile(script, "try { require.resolve('xray-custom-missing', {paths: []}) } catch {}\ntry { require('xray-ordinary-missing') } catch {}\nprocess.exitCode = 7;\n")
+    const hook = new URL('../src/trace-hook.mjs', import.meta.url).href
+    const result = spawnSync(process.execPath, ['--import', hook, script], { encoding: 'utf8', env: { ...process.env, XRAY_TRACE_FILE: events } })
+    assert.ifError(result.error)
+    assert.equal(result.status, 7, result.stderr)
+    const failures = (await readFile(events, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    assert.equal(failures.filter(item => item.specifier === 'xray-custom-missing' && item.customResolution).length, 1)
+    assert.equal(failures.filter(item => item.specifier === 'xray-ordinary-missing' && !item.customResolution).length, 1)
+  } finally { await rm(root, { recursive: true, force: true }) }
 })

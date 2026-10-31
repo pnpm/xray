@@ -204,3 +204,100 @@ fn shell_signal_status_is_preserved() {
     let status = Command::new("sh").args(["-c", "kill -TERM $$"]).status().unwrap();
     assert_eq!(super::status_code(status), 143);
 }
+
+#[test]
+fn custom_resolver_options_are_diagnostic_only_and_preserve_getter_behavior() {
+    if !Command::new("node")
+        .args([
+            "-e",
+            "process.exit(typeof require('node:module').registerHooks === 'function' ? 0 : 1)",
+        ])
+        .status()
+        .is_ok_and(|status| status.success())
+    {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let package = temp.path().join("node_modules/example");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("package.json"), r#"{"name":"example","version":"1.0.0"}"#)
+        .unwrap();
+    let script = package.join("index.cjs");
+    let marker = temp.path().join("observed.json");
+    std::fs::write(
+        &script,
+        r"
+let reads = 0;
+const errors = [];
+try { require.resolve('custom-missing', { get paths() { reads++; return []; } }); }
+catch (error) { errors.push([error.code, error.message]); }
+try { require('ordinary-missing'); }
+catch (error) { errors.push([error.code, error.message]); }
+require('node:fs').writeFileSync(process.argv[2], JSON.stringify({reads, errors}));
+process.exitCode = 7;
+",
+    )
+    .unwrap();
+    // Node's hook-enabled resolver itself reads options differently from its
+    // legacy path. Compare against an inert public hook to detect extra reads
+    // introduced by xray's context tracking rather than by Node's hook API.
+    let baseline = Command::new("node")
+        .args(["--import", "data:text/javascript,import{registerHooks}from'node:module';registerHooks({resolve(s,c,n){return n(s,c)}})"])
+        .arg(&script)
+        .arg(&marker)
+        .status()
+        .unwrap();
+    let expected = std::fs::read_to_string(&marker).unwrap();
+    let observed = run(
+        &["node".into(), script.into_os_string(), marker.clone().into_os_string()],
+        &[package],
+        temp.path(),
+    )
+    .unwrap();
+    assert_eq!(baseline.code(), Some(7));
+    assert_eq!(observed.status.code(), baseline.code());
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), expected);
+    assert_eq!(observed.reports.len(), 1);
+    assert_eq!(observed.reports[0].findings.len(), 1);
+    assert_eq!(observed.reports[0].findings[0].dependency, "ordinary-missing");
+    assert_eq!(observed.diagnostics.len(), 1);
+    assert!(observed.diagnostics[0].message.contains("Explicit resolver options"));
+    assert!(observed.diagnostics[0].message.contains("custom-missing"));
+}
+
+#[test]
+fn diagnoses_workspace_failures_without_proposing_dependency_extensions() {
+    if !Command::new("node")
+        .args([
+            "-e",
+            "process.exit(typeof require('node:module').registerHooks === 'function' ? 0 : 1)",
+        ])
+        .status()
+        .is_ok_and(|status| status.success())
+    {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("packages/app");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(temp.path().join("pnpm-workspace.yaml"), "packages: ['packages/*']\n").unwrap();
+    std::fs::write(
+        workspace.join("package.json"),
+        r#"{"name":"workspace-fixture","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    let script = workspace.join("index.cjs");
+    std::fs::write(
+        &script,
+        "try { require('workspace-missing'); } catch {} process.exitCode = 7;\n",
+    )
+    .unwrap();
+    let observed = run(&["node".into(), script.into_os_string()], &[], temp.path()).unwrap();
+    assert_eq!(observed.status.code(), Some(7));
+    assert!(observed.reports.is_empty());
+    assert_eq!(observed.diagnostics.len(), 1);
+    assert_eq!(observed.diagnostics[0].package, "workspace-fixture@1.0.0");
+    assert_eq!(observed.diagnostics[0].file, "index.cjs");
+    assert!(observed.diagnostics[0].message.contains("Workspace source"));
+    assert!(observed.diagnostics[0].message.contains("workspace-missing"));
+}

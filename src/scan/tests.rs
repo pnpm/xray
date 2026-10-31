@@ -199,6 +199,31 @@ fn constant_commonjs_aliases_follow_bindings_without_guessing_mutable_or_shadowe
 }
 
 #[test]
+fn custom_resolution_roots_are_not_attributed_to_the_calling_package() {
+    let source = r"require.resolve('default'); require.resolve('local', {paths: [__dirname]}); require.resolve('empty', {}); require.resolve('foreign', {paths: [otherDir]}); const resolve = require.resolve; resolve('aliased-foreign', {paths: [otherDir]}); const load = require; load.resolve('aliased-local', {paths: [__dirname]}); require.resolve('opaque', options); function f(__dirname) { require.resolve('shadowed-dir', {paths: [__dirname]}); }";
+    let expected = ["aliased-local", "default", "empty", "local"];
+    assert_eq!(script(source, "index.cjs"), expected);
+    assert_eq!(script(&format!("// @flow\n{source}"), "index.js"), expected);
+}
+
+#[test]
+fn node_custom_resolve_roots_can_reach_another_packages_dependency() {
+    let root = tempfile::tempdir().unwrap();
+    let foreign = root.path().join("foreign");
+    let dependency = foreign.join("node_modules/foreign-only");
+    std::fs::create_dir_all(&dependency).unwrap();
+    std::fs::write(dependency.join("index.js"), "module.exports = 1;").unwrap();
+    let foreign_path = serde_json::to_string(&foreign.to_string_lossy()).unwrap();
+    let source = format!("require.resolve('foreign-only', {{paths: [{foreign_path}]}});\n");
+    let entry = root.path().join("caller/entry.cjs");
+    std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+    std::fs::write(&entry, &source).unwrap();
+    let output = std::process::Command::new("node").arg(&entry).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(crate::scan::references(&source, &entry).unwrap().is_empty());
+}
+
+#[test]
 fn commonjs_aliases_match_node_runtime() {
     let root = tempfile::tempdir().unwrap();
     let package = root.path().join("node_modules/example");

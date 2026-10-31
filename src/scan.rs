@@ -1,9 +1,10 @@
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Argument, BindingPattern, CallExpression, ExportAllDeclaration, ExportFromDeclaration,
-    Expression, ImportDeclaration, ImportDeclarationSpecifier, ImportExpression, Program,
-    PropertyKey, TSExternalModuleReference, TSImportType, VariableDeclaration,
-    VariableDeclarationKind, VariableDeclarator,
+    Argument, ArrayExpressionElement, BindingPattern, CallExpression, ExportAllDeclaration,
+    ExportFromDeclaration, Expression, ImportDeclaration, ImportDeclarationSpecifier,
+    ImportExpression, ObjectPropertyKind, Program, PropertyKey, PropertyKind,
+    TSExternalModuleReference, TSImportType, VariableDeclaration, VariableDeclarationKind,
+    VariableDeclarator,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
@@ -427,7 +428,16 @@ impl<'a> Visit<'a> for Collector<'_> {
     /// not a literal names a package only the running program knows, so there is
     /// nothing to report.
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-        if is_require(&call.callee, self.scoping, &self.require_bindings, &self.resolve_bindings)
+        let loader = is_loader(&call.callee, self.scoping, &self.require_bindings);
+        let resolver = !loader
+            && is_require(
+                &call.callee,
+                self.scoping,
+                &self.require_bindings,
+                &self.resolve_bindings,
+            );
+        if loader
+            || (resolver && has_local_resolve_paths(call, self.scoping))
             || is_import_meta_resolve(&call.callee)
         {
             if let Some(Argument::StringLiteral(literal)) = call.arguments.first() {
@@ -436,6 +446,39 @@ impl<'a> Visit<'a> for Collector<'_> {
         }
         walk::walk_call_expression(self, call);
     }
+}
+
+/// Custom search roots can belong to another package. Only a missing options
+/// object, an empty object, or the caller's unshadowed __dirname is local.
+fn has_local_resolve_paths(call: &CallExpression<'_>, scoping: &Scoping) -> bool {
+    let Some(options) = call.arguments.get(1) else {
+        return true;
+    };
+    let Argument::ObjectExpression(options) = options else {
+        return false;
+    };
+    if options.properties.is_empty() {
+        return true;
+    }
+    let [ObjectPropertyKind::ObjectProperty(property)] = options.properties.as_slice() else {
+        return false;
+    };
+    let named_paths = match &property.key {
+        PropertyKey::StaticIdentifier(name) => name.name == "paths",
+        PropertyKey::StringLiteral(name) => name.value == "paths",
+        _ => false,
+    };
+    if !named_paths || property.computed || property.method || property.kind != PropertyKind::Init {
+        return false;
+    }
+    let Expression::ArrayExpression(paths) = &property.value else {
+        return false;
+    };
+    let [ArrayExpressionElement::Identifier(name)] = paths.elements.as_slice() else {
+        return false;
+    };
+    name.name == "__dirname"
+        && name.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id()).is_none()
 }
 
 fn is_import_meta_resolve(callee: &Expression<'_>) -> bool {

@@ -22,6 +22,8 @@ struct Event {
     code: String,
     #[serde(default)]
     message: String,
+    #[serde(default, rename = "customResolution")]
+    custom_resolution: bool,
 }
 
 pub struct TraceResult {
@@ -59,6 +61,12 @@ pub fn run(command: &[OsString], packages: &[PathBuf], project: &Path) -> Result
         options.push(" ");
     }
     options.push(format!("--import={}", file_url(&hook)?));
+    let mut owners = packages.to_vec();
+    for workspace in crate::workspace::projects(project)? {
+        if workspace.join("package.json").is_file() {
+            owners.push(workspace);
+        }
+    }
     let status = Command::new(program)
         .args(args)
         .current_dir(project)
@@ -66,7 +74,7 @@ pub fn run(command: &[OsString], packages: &[PathBuf], project: &Path) -> Result
         .env("XRAY_TRACE_FILE", &events)
         .status()
         .context("starting traced command")?;
-    let (reports, diagnostics) = reports_from_events(&std::fs::read_to_string(events)?, packages)?;
+    let (reports, diagnostics) = reports_from_events(&std::fs::read_to_string(events)?, &owners)?;
     Ok(TraceResult { status, reports, diagnostics })
 }
 
@@ -116,22 +124,21 @@ fn reports_from_events(
     let mut roots = Vec::new();
     for package in packages {
         let path = package.canonicalize()?;
-        // Workspace packages resolve to their source directories, while an
-        // installed package resides under a node_modules directory even in the
-        // global virtual store. Never attribute workspace failures to packages.
-        if !path.components().any(|component| component.as_os_str() == "node_modules") {
-            continue;
-        }
+        let installed = path.components().any(|component| component.as_os_str() == "node_modules");
         let manifest = Manifest::read(&path)?;
-        roots.push((path, manifest));
+        roots.push((path, manifest, installed));
     }
-    roots.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
+    roots.sort_by_key(|(path, _, _)| std::cmp::Reverse(path.components().count()));
     let mut reports: BTreeMap<String, BTreeMap<String, Finding>> = BTreeMap::new();
     let mut diagnostics = BTreeMap::new();
     for line in raw.lines() {
         let event: Event = serde_json::from_str(line).context("reading Node trace event")?;
         let Ok(parent) = event.parent.canonicalize() else { continue };
-        let Some((root, manifest)) = roots.iter().find(|(path, _)| parent.starts_with(path)) else {
+        let Some((root, manifest, installed)) = roots.iter().find(|(path, _, installed)| {
+            parent.strip_prefix(path).is_ok_and(|relative| {
+                *installed || !relative.components().any(|part| part.as_os_str() == "node_modules")
+            })
+        }) else {
             continue;
         };
         let relative =
@@ -140,9 +147,21 @@ fn reports_from_events(
         let declared = name.is_some_and(|name| manifest.reachable().any(|dep| dep == name));
         let missing = event.code.is_empty()
             || matches!(event.code.as_str(), "MODULE_NOT_FOUND" | "ERR_MODULE_NOT_FOUND");
-        if !missing || declared || event.specifier.starts_with('#') {
+        if !missing
+            || declared
+            || event.specifier.starts_with('#')
+            || !installed
+            || event.custom_resolution
+        {
+            let context = if !installed {
+                "Workspace source; package extensions do not repair workspace manifests. "
+            } else if event.custom_resolution {
+                "Explicit resolver options; caller dependency ownership is uncertain. "
+            } else {
+                ""
+            };
             let message = format!(
-                "{}: {} ({})",
+                "{context}{}: {} ({})",
                 event.code,
                 event.specifier,
                 event.message.lines().next().unwrap_or(""),

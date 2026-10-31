@@ -100,6 +100,19 @@ function isImportMetaResolve(callee) {
   return name === 'resolve' && callee.object.type === 'MetaProperty' &&
     callee.object.meta.name === 'import' && callee.object.property.name === 'meta';
 }
+function hasLocalResolvePaths(node, current) {
+  if (node.arguments.length < 2) return true;
+  const options = node.arguments[1];
+  if (options?.type !== 'ObjectExpression') return false;
+  if (options.properties.length === 0) return true;
+  if (options.properties.length !== 1) return false;
+  const property = options.properties[0];
+  const name = property?.key?.name ?? property?.key?.value;
+  if (property?.type !== 'Property' || property.kind !== 'init' || property.computed || property.method || name !== 'paths') return false;
+  const paths = property.value;
+  return paths?.type === 'ArrayExpression' && paths.elements.length === 1 &&
+    paths.elements[0]?.type === 'Identifier' && paths.elements[0].name === '__dirname' && !shadowed(current, '__dirname');
+}
 function visit(node) {
   if (!node || typeof node !== 'object') return;
   if (Array.isArray(node)) { for (const item of node) visit(item); return; }
@@ -107,7 +120,12 @@ function visit(node) {
     case 'ImportDeclaration': record(node.source, node.importKind === 'type' || node.importKind === 'typeof' ? 'types' : 'runtime', true); break;
     case 'ExportNamedDeclaration': case 'ExportAllDeclaration': record(node.source, node.exportKind === 'type' ? 'types' : 'runtime', true); break;
     case 'ImportExpression': record(node.source, 'runtime', true); break;
-    case 'CallExpression': if (isRequire(node.callee, scopes.get(node)) || isImportMetaResolve(node.callee)) record(node.arguments[0], 'runtime'); break;
+    case 'CallExpression': {
+      const current = scopes.get(node);
+      const loader = isLoader(node.callee, current);
+      if (loader || (isRequire(node.callee, current) && hasLocalResolvePaths(node, current)) || isImportMetaResolve(node.callee)) record(node.arguments[0], 'runtime');
+      break;
+    }
   }
   for (const [key, value] of Object.entries(node)) {
     if (!skippedKeys.has(key)) visit(value);

@@ -184,7 +184,7 @@ jobs:
       matrix:
         # The floor `engines.node` promises, and the current release. Leaving
         # the runtime unpinned would let the promise drift out of test.
-        node: ['20.19', '24']
+        node: ['20.19', '22.15.0', '24']
     steps:
     - name: Checkout Commit
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
