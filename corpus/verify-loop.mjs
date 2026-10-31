@@ -14,7 +14,13 @@ import { minimumReleaseAge } from './registry-cutoff.mjs'
 const binary = resolve(process.argv[2] ?? fileURLToPath(new URL('../target/debug/xray', import.meta.url)))
 const temp = await mkdtemp(join(tmpdir(), 'xray-verify-loop-'))
 const releaseAge = minimumReleaseAge()
-const testEnv = { ...process.env, TMPDIR: temp }
+// xray keeps recovery journals and workspace locks under XDG_STATE_HOME, so
+// point it at the test's own directory to keep runs isolated from each other
+// and from the user's real state.
+const stateHome = join(temp, 'state')
+const recoveryRoot = join(stateHome, 'xray', 'recovery')
+const testEnv = { ...process.env, TMPDIR: temp, XDG_STATE_HOME: stateHome }
+async function recoveryJournals() { return readdir(recoveryRoot).catch((error) => { if (error.code === 'ENOENT') return []; throw error }) }
 function run(command, args, cwd, env = testEnv) {
   const result = spawnSync(command, args, { cwd, env, encoding: 'utf8', timeout: 240_000, maxBuffer: 20 * 1024 * 1024 })
   if (result.error) throw result.error
@@ -171,7 +177,7 @@ try {
     const mutation = run(binary, ['--verify', conflict.root, '--', process.execPath, 'packages/app/mutate.cjs'], conflict.root)
     const currentConfig = await readFile(join(conflict.root, 'pnpm-workspace.yaml'), 'utf8')
     assert(mutation.status === 1 && currentConfig.includes('# user command mutation'), `${label}: conflicting command mutation was not preserved: ${mutation.stdout}\n${mutation.stderr}`)
-    const recoveryPath = mutation.stderr.match(/(?:\/[a-zA-Z0-9._-]+)+\/xray-recovery-[a-zA-Z0-9._-]+/)?.[0]
+    const recoveryPath = (await recoveryJournals()).map((entry) => join(recoveryRoot, entry)).find((path) => mutation.stderr.includes(path))
     assert(recoveryPath, `${label}: recovery path was not reported: ${mutation.stderr}`)
     try {
       const recovery = JSON.parse(await readFile(join(recoveryPath, 'recovery.json'), 'utf8'))
@@ -223,7 +229,7 @@ try {
 
     const cancellation = await fixture(`${label}-cancel`, globalStore)
     const cancelBefore = await snapshot(cancellation.root)
-    const recoveryBefore = new Set((await readdir(temp)).filter((entry) => entry.startsWith('xray-recovery-')))
+    const recoveryBefore = new Set(await recoveryJournals())
     await writeFile(join(cancellation.app, 'block.cjs'), `const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const fail = (error) => { if (error) console.error(error); process.exitCode = 1 };
@@ -270,7 +276,7 @@ try { require('@vue/consolidate').pug.render('p hello', {}, (err) => {
     assert(heartbeatAtRollback !== null && heartbeatAtRollback === lastHeartbeat, `${label}: descendant was not stopped before rollback started`)
     await new Promise((resolveWait) => setTimeout(resolveWait, 300))
     assert(await optionalFile(heartbeat) === lastHeartbeat, `${label}: descendant process continued running after cancellation`)
-    const recoveryDirectories = (await readdir(temp)).filter((entry) => entry.startsWith('xray-recovery-') && !recoveryBefore.has(entry))
+    const recoveryDirectories = (await recoveryJournals()).filter((entry) => !recoveryBefore.has(entry))
     assert(recoveryDirectories.length === 0, `${label}: successful cancellation left recovery journals: ${recoveryDirectories}`)
     console.log(`PASS ${label}: SIGINT terminates the command group before restoring the original graph`)
 
