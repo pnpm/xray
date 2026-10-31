@@ -37,3 +37,33 @@ fn wildcard_does_not_overlap_prerelease_but_unversioned_selector_does() {
     assert!(check(wildcard, proposed).is_ok());
     assert!(check(unversioned, proposed).is_err());
 }
+
+#[test]
+fn refuses_a_generated_patch_that_a_user_patch_already_selects() {
+    let proposed = "patchedDependencies:\n  'example@1.2.3': 'patches/example@1.2.3.patch'\n";
+    for existing in [
+        "patchedDependencies:\n  example: patches/user.patch\n",
+        "patchedDependencies:\n  'example@^1': patches/user.patch\n",
+        "patchedDependencies:\n  'example@1.2.3': patches/user.patch\n",
+        "patchedDependencies:\n  'example@not a range': patches/user.patch\n",
+    ] {
+        let error = check(existing, proposed).unwrap_err().to_string();
+        assert!(error.contains("already patches example@1.2.3"), "{existing}: {error}");
+        assert!(super::existing_patch(existing, "example@1.2.3").unwrap().is_some());
+    }
+}
+
+#[test]
+fn permits_patches_for_other_versions_and_the_same_patch_again() {
+    let proposed = "patchedDependencies:\n  'example@1.2.3': 'patches/example@1.2.3.patch'\n";
+    for existing in [
+        "patchedDependencies:\n  'example@^2': patches/user.patch\n",
+        "patchedDependencies:\n  'example@1.2.4': patches/user.patch\n",
+        "patchedDependencies:\n  example-other: patches/user.patch\n",
+        "patchedDependencies:\n  '@scope/example': patches/user.patch\n",
+        proposed,
+    ] {
+        assert!(check(existing, proposed).is_ok(), "{existing}");
+    }
+    assert!(super::existing_patch("hoist: false\n", "example@1.2.3").unwrap().is_none());
+}

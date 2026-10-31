@@ -150,3 +150,24 @@ fn unrelated_symlinked_patch_directory_does_not_block_extension_only_repair() {
     assert!(apply(&workspace, proposed, &plan).unwrap());
     assert!(std::fs::read_to_string(workspace).unwrap().contains("example@1.0.0"));
 }
+
+#[test]
+fn skips_declaration_patches_for_packages_the_user_already_patches() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("pnpm-workspace.yaml");
+    let patch = |package: &str| DeclarationPatch {
+        package: package.into(),
+        compiler: "5.9.3".into(),
+        files: Vec::new(),
+    };
+    let patches = vec![patch("example@1.0.0"), patch("other@2.0.0")];
+    let kept = super::without_user_patches(patches.clone(), &workspace).unwrap();
+    assert_eq!(kept.len(), 2);
+    std::fs::write(&workspace, "patchedDependencies:\n  'example@^1': patches/user.patch\n")
+        .unwrap();
+    let kept = super::without_user_patches(patches, &workspace).unwrap();
+    assert_eq!(
+        kept.iter().map(|patch| patch.package.as_str()).collect::<Vec<_>>(),
+        ["other@2.0.0"]
+    );
+}

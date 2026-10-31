@@ -6,6 +6,17 @@ use yaml_rust2::{yaml::Hash, Yaml, YamlLoader};
 pub fn check(existing: &str, proposed: &str) -> Result<()> {
     let existing = YamlLoader::load_from_str(existing).context("parsing existing workspace")?;
     let proposed = YamlLoader::load_from_str(proposed).context("parsing proposed extensions")?;
+    if let Some(new) = proposed.first().and_then(|doc| doc["patchedDependencies"].as_hash()) {
+        for (key, value) in new {
+            let key = key.as_str().context("generated patch key must be a string")?;
+            if let Some(user) = shadowed_patch(&existing, key, value) {
+                bail!(
+                    "existing patchedDependencies entry {user} already patches {key}; \
+                     remove it or fold the declaration repair into that patch"
+                );
+            }
+        }
+    }
     let Some(old) = existing.first().and_then(|doc| doc["packageExtensions"].as_hash()) else {
         return Ok(());
     };
@@ -40,6 +51,41 @@ pub fn check(existing: &str, proposed: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The user's `patchedDependencies` key that pnpm would weigh against a
+/// generated `name@version` patch, if any. pnpm prefers an exact version, then
+/// a range, then a bare name, and applies only one patch per package, so any
+/// existing key that selects the same version would either be displaced by the
+/// generated patch or displace it. An identical key with an identical value is
+/// the same repair applied again. A key whose range cannot be assessed counts as
+/// matching, so a user's patch is never silently overridden.
+pub fn existing_patch(existing: &str, package: &str) -> Result<Option<String>> {
+    let documents = YamlLoader::load_from_str(existing).context("parsing existing workspace")?;
+    Ok(shadowed_patch(&documents, package, &Yaml::Null))
+}
+
+fn shadowed_patch(existing: &[Yaml], key: &str, value: &Yaml) -> Option<String> {
+    let old = existing.first().and_then(|doc| doc["patchedDependencies"].as_hash())?;
+    let (name, version) = split_selector(key);
+    let version = version.map(Version::parse);
+    for (old_key, old_value) in old {
+        let Some(old_key) = old_key.as_str() else { continue };
+        let (old_name, old_range) = split_selector(old_key);
+        if old_name != name || old_key == key && old_value == value {
+            continue;
+        }
+        let selects = match (old_range, &version) {
+            (Some(range), Some(Ok(version))) => {
+                Range::parse(range).map_or(true, |range| range.satisfies(version))
+            }
+            _ => true,
+        };
+        if selects {
+            return Some(old_key.to_string());
+        }
+    }
+    None
 }
 
 fn split_selector(selector: &str) -> (&str, Option<&str>) {

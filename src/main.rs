@@ -250,7 +250,10 @@ fn write_repairs(
         for message in proposal.messages {
             eprintln!("Declaration verification: {message}");
         }
-        proposal.patches
+        declaration_patch::without_user_patches(
+            proposal.patches,
+            &workspace.join("pnpm-workspace.yaml"),
+        )?
     } else {
         Vec::new()
     };

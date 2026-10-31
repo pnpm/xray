@@ -84,6 +84,36 @@ pub fn plan(patches: &[DeclarationPatch], packages: &[PathBuf]) -> Result<PatchP
     Ok(PatchPlan { configuration, artifacts })
 }
 
+/// Drop declaration patches for packages the workspace already patches. pnpm
+/// applies one patch per package, so a generated exact-version entry would
+/// displace a user's name or range entry, and the generated diff was computed
+/// from the installed copy that already carries the user's patch.
+pub fn without_user_patches(
+    patches: Vec<DeclarationPatch>,
+    workspace: &Path,
+) -> Result<Vec<DeclarationPatch>> {
+    let existing = match std::fs::read_to_string(workspace) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(patches),
+        Err(error) => {
+            return Err(error).with_context(|| format!("reading {}", workspace.display()))
+        }
+    };
+    let mut kept = Vec::new();
+    for patch in patches {
+        if let Some(user) = crate::repair_conflicts::existing_patch(&existing, &patch.package)? {
+            eprintln!(
+                "Skipped the declaration patch for {}: patchedDependencies entry {user} already \
+                 patches it. Fold the repair into that patch to keep both.",
+                patch.package,
+            );
+        } else {
+            kept.push(patch);
+        }
+    }
+    Ok(kept)
+}
+
 fn diff(path: &str, original: &str, replacement: &str) -> String {
     let old_count = original.lines().count();
     let new_count = replacement.lines().count();
