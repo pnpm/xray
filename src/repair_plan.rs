@@ -122,10 +122,7 @@ fn add_installed_aliases(
             let Ok(version) = node_semver::Version::parse(&provider.version) else {
                 continue;
             };
-            // The emitted optional peer is `*`; avoid guessing whether a
-            // prerelease provider will satisfy it across pnpm configurations.
-            if !version.pre_release.is_empty()
-                || provider.name != name
+            if provider.name != name
                 || range.as_ref().is_some_and(|range| !range.satisfies(&version))
             {
                 continue;

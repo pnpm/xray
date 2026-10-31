@@ -117,6 +117,25 @@ fn npm_alias_parser_accepts_scopes_and_rejects_nonportable_specs() {
     assert!(super::npm_alias("npm:real@latest").is_none());
     assert!(super::npm_alias("npm:../outside@1").is_none());
 }
+
+#[test]
+fn selects_verified_prerelease_alias_with_matching_exact_request() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("package.json"),
+        r#"{"dependencies":{"alias-provider":"npm:real-provider@2.0.0-rc.24"}}"#,
+    )
+    .unwrap();
+    let provider =
+        package(root.path(), "node_modules/alias-provider", "real-provider", "2.0.0-rc.24");
+    let reports = vec![PackageReport {
+        package: "consumer@1.0.0".into(),
+        findings: vec![finding("alias-provider", Origin::Runtime, None)],
+    }];
+    let selected = select(&reports, &[provider], root.path()).unwrap();
+    assert_eq!(selected[0].findings[0].dependency, "alias-provider");
+    assert!(crate::report::as_package_extensions(&selected).contains("'alias-provider': '*'"));
+}
 #[test]
 fn chooses_types_for_untyped_provider_but_not_one_that_ships_types() {
     let root = tempfile::tempdir().unwrap();
@@ -208,6 +227,23 @@ fn permits_concrete_prerelease_but_not_a_range() {
     assert!(exact_version("1.2.3-beta.1"));
     assert!(!exact_version("^1.2.3"));
     assert!(!exact_version("*"));
+}
+
+#[test]
+fn installed_prerelease_runtime_provider_remains_an_optional_peer() {
+    let root = tempfile::tempdir().unwrap();
+    let provider = package(root.path(), "provider", "runtime-provider", "2.0.0-rc.24");
+    let reports = vec![PackageReport {
+        package: "consumer@1.0.0".into(),
+        findings: vec![finding("runtime-provider", Origin::Runtime, None)],
+    }];
+    let selected = select(&reports, &[provider], root.path()).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].findings[0].dependency, "runtime-provider");
+    assert!(selected[0].findings[0].declared_range.is_none());
+    let rendered = crate::report::as_package_extensions(&selected);
+    assert!(rendered.contains("'runtime-provider': '*'"));
+    assert!(rendered.contains("optional: true"));
 }
 
 #[test]
