@@ -401,8 +401,8 @@ The strict declaration probe imported the *installed registry package*
 `@eslint-community/eslint-utils@4.9.1` from the plugin workspace and ran:
 
 ```sh
-./node_modules/.bin/tsc --ignoreConfig --noEmit --module nodenext \\
-  --moduleResolution nodenext --target es2022 --types node \\
+./node_modules/.bin/tsc --ignoreConfig --noEmit --module nodenext \
+  --moduleResolution nodenext --target es2022 --types node \
   packages/eslint-plugin-next/xray-probe.ts
 ```
 

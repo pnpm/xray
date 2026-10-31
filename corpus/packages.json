@@ -109,8 +109,8 @@
         "origin": "runtime"
       }
     ],
-    "maxDiagnosticLines": 1,
-    "evidence": "The CommonJS entry directly requires tiny-warning, omitted from the manifest; src/index.js contains Flow, which is currently unsupported."
+    "maxDiagnosticLines": 0,
+    "evidence": "The CommonJS entry directly requires tiny-warning, omitted from the manifest; src/index.js contains Flow, which must parse without a diagnostic."
   },
   {
     "name": "@rollup/plugin-dynamic-import-vars",
