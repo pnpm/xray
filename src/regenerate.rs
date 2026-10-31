@@ -90,6 +90,7 @@ fn verified_patches(
 ) -> Result<Vec<DeclarationPatch>> {
     let mut patches: BTreeMap<String, Vec<DeclarationFile>> = BTreeMap::new();
     let mut seen = BTreeSet::new();
+    let mut seen_files = BTreeSet::new();
     for file in result.files {
         let canonical_root = file.root.canonicalize()?;
         let Some(package) = roots.get(&canonical_root) else {
@@ -129,11 +130,24 @@ fn verified_patches(
         if file.original == file.replacement {
             bail!("regeneration returned an unchanged file");
         }
-        if !seen.insert((package.clone(), relative.to_path_buf())) {
+        if !seen_files.insert(canonical.clone()) {
             bail!("regeneration returned a duplicate file");
         }
         if std::fs::read_to_string(&canonical)? != file.original {
             bail!("declaration changed during verification");
+        }
+        // pnpm installs one `name@version` in several directories when peer
+        // resolutions differ, so the same declaration can come back once per
+        // copy. Identical edits are one patch; differing ones cannot be.
+        if !seen.insert((package.clone(), relative.to_path_buf())) {
+            let existing = patches
+                .get(package)
+                .and_then(|files| files.iter().find(|item| item.path == relative))
+                .context("regeneration returned a duplicate declaration")?;
+            if existing.original != file.original || existing.replacement != file.replacement {
+                bail!("regeneration returned conflicting replacements for {package}");
+            }
+            continue;
         }
         patches.entry(package.clone()).or_default().push(DeclarationFile {
             path: relative.into(),

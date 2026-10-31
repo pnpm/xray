@@ -47,6 +47,33 @@ fn validates_declaration_paths_changes_and_uniqueness() {
 }
 
 #[test]
+fn merges_identical_edits_to_peer_variant_copies_of_one_package() {
+    let temp = tempfile::tempdir().unwrap();
+    let first_root = temp.path().join("a");
+    let second_root = temp.path().join("b");
+    std::fs::create_dir_all(&first_root).unwrap();
+    std::fs::create_dir_all(&second_root).unwrap();
+    let first_root = first_root.canonicalize().unwrap();
+    let second_root = second_root.canonicalize().unwrap();
+    let roots = BTreeMap::from([
+        (first_root.clone(), "fixture@1.0.0".into()),
+        (second_root.clone(), "fixture@1.0.0".into()),
+    ]);
+    let files = vec![
+        item(&first_root, "index.d.ts", "old", "new"),
+        item(&second_root, "index.d.ts", "old", "new"),
+    ];
+    let patches = verified_patches(result(files), &roots).unwrap();
+    assert_eq!(patches.len(), 1);
+    assert_eq!(patches[0].files.len(), 1);
+    let conflicting = vec![
+        item(&first_root, "index.d.ts", "old", "new"),
+        item(&second_root, "index.d.ts", "old", "other"),
+    ];
+    assert!(verified_patches(result(conflicting), &roots).is_err());
+}
+
+#[test]
 fn refuses_nested_file_attributed_to_outer_package() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
