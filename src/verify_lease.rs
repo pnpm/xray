@@ -94,7 +94,7 @@ impl WorkspaceLock {
         file.try_lock().map_err(|_| {
             anyhow::anyhow!(
                 "another xray verification or recovery is running for {}",
-                root.display()
+                root.display(),
             )
         })?;
         Ok(Self { _file: file })

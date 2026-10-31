@@ -12,7 +12,7 @@ pub fn check(existing: &str, proposed: &str) -> Result<()> {
             if let Some(user) = shadowed_patch(&existing, key, value) {
                 bail!(
                     "existing patchedDependencies entry {user} already patches {key}; \
-                     remove it or fold the declaration repair into that patch"
+                     remove it or fold the declaration repair into that patch",
                 );
             }
         }

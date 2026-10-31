@@ -68,13 +68,6 @@ pub fn exit_code(status: ExitStatus, interrupted: bool) -> u8 {
     }
 }
 
-/// Run a command with the Node preload active. Its streams and exit status are
-/// unchanged. Every captured resolution failure may have been caught by code.
-#[cfg(test)]
-pub fn run(command: &[OsString], packages: &[PathBuf], project: &Path) -> Result<TraceResult> {
-    run_interactive(command, packages, project, &AtomicBool::new(false))
-}
-
 /// Run a command in the foreground for plain `--trace`. The terminal delivers
 /// Ctrl-C to the command as well, so on `cancelled` it is given time to shut
 /// down on its own before it is killed, and the observations made until then

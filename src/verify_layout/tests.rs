@@ -10,7 +10,7 @@ fn reinstalls_reproduce_the_original_dependency_groups() {
     std::fs::create_dir_all(&store).unwrap();
     let base = format!(
         "nodeLinker: isolated\nstoreDir: '{}'\nvirtualStoreDir: .pnpm\npublicHoistPattern: []\n",
-        store.display()
+        store.display(),
     );
     metadata(root, &format!("{base}included:\n  dependencies: true\n  devDependencies: false\n  optionalDependencies: true\n"));
     let layout = Layout::capture(root).unwrap();
@@ -37,7 +37,7 @@ fn reinstalls_reproduce_the_original_dependency_groups() {
     assert_eq!(effective_included(&serde_json::json!({}), &[], true), (true, false, true));
     assert_eq!(
         effective_included(&serde_json::json!({"optional": false}), &[], false),
-        (true, true, false)
+        (true, true, false),
     );
 }
 
@@ -52,7 +52,7 @@ fn rejects_importers_installed_with_different_dependency_groups() {
     std::fs::create_dir_all(root.join("app")).unwrap();
     let base = format!(
         "nodeLinker: isolated\nstoreDir: '{}'\nvirtualStoreDir: .pnpm\npublicHoistPattern: []\n",
-        store.display()
+        store.display(),
     );
     let groups = |dev: bool| {
         format!("{base}included:\n  dependencies: true\n  devDependencies: {dev}\n  optionalDependencies: true\n")

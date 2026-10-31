@@ -1,5 +1,18 @@
-use super::{file_url_for_platform, reports_from_events, run, trace_owners};
-use std::process::Command;
+use super::{
+    file_url_for_platform, reports_from_events, run_interactive, trace_owners, TraceResult,
+};
+use anyhow::Result;
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::atomic::AtomicBool,
+};
+
+/// Run a traced command that is never cancelled.
+fn run(command: &[OsString], packages: &[PathBuf], project: &Path) -> Result<TraceResult> {
+    run_interactive(command, packages, project, &AtomicBool::new(false))
+}
 
 #[test]
 fn file_urls_support_windows_drive_verbatim_unc_and_escape_special_characters() {

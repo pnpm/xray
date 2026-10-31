@@ -168,6 +168,6 @@ fn skips_declaration_patches_for_packages_the_user_already_patches() {
     let kept = super::without_user_patches(patches, &workspace).unwrap();
     assert_eq!(
         kept.iter().map(|patch| patch.package.as_str()).collect::<Vec<_>>(),
-        ["other@2.0.0"]
+        ["other@2.0.0"],
     );
 }

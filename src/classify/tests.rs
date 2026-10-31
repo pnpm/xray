@@ -154,7 +154,7 @@ fn a_relative_types_reference_names_no_package() {
         assert_eq!(
             missing_package(&requirement, Origin::Types, &declared(&[])),
             None,
-            "{reference}"
+            "{reference}",
         );
     }
 }

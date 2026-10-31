@@ -157,7 +157,7 @@ pub fn has_extension_selector(report: &PackageReport) -> bool {
     })
 }
 
-/// Packages left out of `as_package_extensions` because their installed
+/// Packages left out of [`as_package_extensions`] because their installed
 /// version cannot select a single release.
 pub fn without_extension_selector(reports: &[PackageReport]) -> Vec<&str> {
     reports
