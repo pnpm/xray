@@ -35,22 +35,25 @@ const syntax = initial.filter(d => d.file && /\.d\.(?:ts|mts|cts)$/.test(d.file.
   ([1039, 1046, 1123].includes(d.code) || syntactic.some(s => s.file === d.file && s.code === d.code && s.start === d.start)));
 const contained = (file, root) => { const p = path.relative(root, file); return p !== '' && !p.startsWith(`..${path.sep}`) && p !== '..' && !path.isAbsolute(p); };
 const candidates = new Map();
+const skipped = { missingDeclaration: 0, outsideRoots: 0, missingRuntime: 0, nonCanonicalRuntime: 0, sourceCollision: 0 };
 for (const diagnostic of syntax) {
   const declaration = real(diagnostic.file.fileName);
-  const root = declaration && roots.find(root => contained(declaration, root));
-  if (!root) continue;
+  if (!declaration) { skipped.missingDeclaration++; continue; }
+  const root = roots.find(root => contained(declaration, root));
+  if (!root) { skipped.outsideRoots++; continue; }
   const runtime = declaration.replace(/\.d\.(mts|cts|ts)$/, (_, ext) => ext === 'mts' ? '.mjs' : ext === 'cts' ? '.cjs' : '.js');
-  if (!fs.existsSync(runtime) || !samePath(real(runtime), runtime)) continue;
+  if (!fs.existsSync(runtime)) { skipped.missingRuntime++; continue; }
+  if (!samePath(real(runtime), runtime)) { skipped.nonCanonicalRuntime++; continue; }
   const perFile = syntax.filter(item => samePath(real(item.file.fileName), declaration));
   // Treat declaration text as virtual TypeScript only for the specific
   // ambient-initializer failure, never for arbitrary malformed declarations.
   const virtual = perFile.some(item => item.code === 1039) && perFile.every(item => [1039, 1046].includes(item.code));
   const virtualFile = declaration.replace(/\.d\.(mts|cts|ts)$/, '.$1');
-  if (virtual && fs.existsSync(virtualFile)) continue;
+  if (virtual && fs.existsSync(virtualFile)) { skipped.sourceCollision++; continue; }
   candidates.set(declaration, { root, runtime, virtual, virtualFile });
 }
 if (!candidates.size || !initial.length) {
-  finish([], syntax.length ? ['No eligible adjacent JavaScript source for the reported declaration errors.'] : []);
+  finish([], syntax.length ? [`No eligible adjacent JavaScript source for the reported declaration errors (${JSON.stringify(skipped)}).`] : []);
   process.exit(0);
 }
 
