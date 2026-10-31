@@ -162,6 +162,22 @@ fn a_js_specifier_resolves_to_the_typescript_source_beside_it() {
 }
 
 #[test]
+fn mjs_and_cjs_specifiers_resolve_to_declarations_of_the_same_format() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","exports":{"types":"./index.d.mts"}"#));
+    write(&dir.join("index.d.mts"), "export * from './types.mjs';\nexport * from './cjs.cjs';\n");
+    write(&dir.join("types.js"), "module.exports = 1;\n");
+    write(&dir.join("types.d.ts"), "export {};\n");
+    write(&dir.join("types.d.mts"), "export {};\n");
+    write(&dir.join("cjs.js"), "module.exports = 1;\n");
+    write(&dir.join("cjs.d.cts"), "export {};\n");
+    let mut found = names(&dir);
+    found.sort();
+    assert_eq!(found, ["cjs.d.cts", "index.d.mts", "types.d.mts"]);
+}
+
+#[test]
 fn every_string_under_exports_is_an_entry() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("pkg");

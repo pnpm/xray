@@ -15,6 +15,14 @@ use walkdir::WalkDir;
 const EXTENSIONS: &[&str] =
     &[".js", ".mjs", ".cjs", ".jsx", ".d.ts", ".d.mts", ".d.cts", ".ts", ".mts", ".cts", ".tsx"];
 
+/// The files TypeScript reads for a missing JavaScript output, declarations
+/// first for the same reason as in [`EXTENSIONS`].
+const SOURCE_FOR_OUTPUT: &[(&str, &[&str])] = &[
+    (".mjs", &[".d.mts", ".mts"]),
+    (".cjs", &[".d.cts", ".cts"]),
+    (".js", &[".d.ts", ".ts", ".tsx", ".jsx"]),
+];
+
 /// The files a package can actually reach, starting from what its manifest
 /// advertises and following relative specifiers outward.
 ///
@@ -357,10 +365,13 @@ fn resolve_relative(from: &Path, specifier: &str) -> Option<PathBuf> {
     }
 
     // A TypeScript package importing `./thing.js` means the file it compiles to,
-    // which is `./thing.ts` in the tarball when sources ship alongside.
-    let rewritten = ["js", "mjs", "cjs"].iter().find_map(|extension| {
-        let stem = base.to_str()?.strip_suffix(&format!(".{extension}"))?;
-        with_extension(Path::new(stem))
+    // which is `./thing.ts` in the tarball when sources ship alongside. The
+    // module format is part of the extension: TypeScript maps `.mjs` only to
+    // `.mts`/`.d.mts` and `.cjs` only to `.cts`/`.d.cts`, so a `thing.js`
+    // beside a missing `thing.mjs` is a different module.
+    let rewritten = SOURCE_FOR_OUTPUT.iter().find_map(|(output, sources)| {
+        let stem = base.to_str()?.strip_suffix(output)?;
+        sources.iter().find_map(|source| existing_file(&append(Path::new(stem), source)))
     });
     if rewritten.is_some() {
         return rewritten;
