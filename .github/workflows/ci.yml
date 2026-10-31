@@ -18,6 +18,9 @@ jobs:
       with:
         persist-credentials: false
     - run: cargo fmt --check
+    - name: Verify vendored Flow parser
+      working-directory: vendor/flow-parser
+      run: sha512sum --check --strict SHA512SUMS
     - name: Install Taplo CLI
       uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
       with:
