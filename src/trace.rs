@@ -352,6 +352,7 @@ fn reports_from_events(raw: &[u8], roots: &[TraceOwner]) -> Observations {
         let finding =
             reports.entry(manifest.id()).or_default().entry(name.to_string()).or_insert_with(
                 || Finding {
+                    deep_import_only: false,
                     dependency: name.to_string(),
                     declared_range: range,
                     severity,

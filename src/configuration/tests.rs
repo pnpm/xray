@@ -9,6 +9,7 @@ fn report(origin: Origin) -> Vec<PackageReport> {
     vec![PackageReport {
         package: "@example/consumer@1.2.3".into(),
         findings: vec![Finding {
+            deep_import_only: false,
             dependency: "helper".into(),
             declared_range: None,
             severity: Severity::Undeclared,

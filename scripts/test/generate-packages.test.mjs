@@ -26,6 +26,10 @@ test('binary packages and wrapper retain the bundled parser notice', async () =>
     const notice = await readFile(join(root, 'THIRD_PARTY_NOTICES'), 'utf8')
     const parserLicense = await readFile(join(repo, 'vendor/flow-parser/LICENSE'), 'utf8')
     assert.ok(notice.includes(parserLicense))
+    assert.ok(notice.includes('Copyright (c) 2024-present VoidZero Inc. & Contributors'))
+    assert.ok(notice.includes('Copyright (c) Microsoft Corporation.'))
+    assert.ok(notice.includes('- oxc_span@'))
+    assert.ok(notice.includes('- windows-sys@'))
     for (const name of Object.keys(wrapper.optionalDependencies)) {
       const target = name.slice('@pnpm/xray.'.length)
       const directory = join(root, `npm/xray.${target}`)

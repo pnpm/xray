@@ -19,6 +19,7 @@ fn package(root: &std::path::Path, dir: &str, name: &str, version: &str) -> Path
 
 fn finding(name: &str, origin: Origin, range: Option<&str>) -> Finding {
     Finding {
+        deep_import_only: false,
         dependency: name.into(),
         declared_range: range.map(str::to_string),
         severity: Severity::Undeclared,

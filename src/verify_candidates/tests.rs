@@ -37,6 +37,7 @@ fn package(root: &Path, dir: &str, name: &str, source: &str, types: Option<&str>
 
 fn finding(name: &str) -> Finding {
     Finding {
+        deep_import_only: false,
         dependency: name.into(),
         declared_range: None,
         severity: Severity::Undeclared,

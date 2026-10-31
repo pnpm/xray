@@ -29,10 +29,26 @@ expected findings; avoid relying on `latest` or executing untrusted package code
 
 The separate integration test requires pnpm and installs pinned registry packages
 with lifecycle scripts disabled in temporary workspaces. There is no lockfile;
-transitive dependencies resolve only to versions published before the fixed
-`REGISTRY_CUTOFF` in `registry-cutoff.mjs`, enforced through pnpm's
-`minimumReleaseAge`. Move the cutoff forward when adding or bumping a pin; a
-pin newer than the cutoff fails the install. It runs TypeScript before
+transitive dependencies are restricted by a fixed publication cutoff, enforced
+through pnpm's `minimumReleaseAge`. The cutoff comes from the reviewed exact
+pins and publication times in `registry-pins.json`, with the previous cutoff
+as a floor, a 45-minute run allowance, and one minute for pnpm rounding. Each run derives its release age
+from its deadline and limits child command duration, so the cutoff does not
+drift forward during normal execution. A run that exceeds its window fails.
+There is no lockfile, so this limits version eligibility rather than guaranteeing
+the same transitive resolution, availability, or registry metadata forever.
+
+When adding or changing a fixture dependency, run
+`node corpus/update-registry-pins.mjs package@1.2.3 > /tmp/registry-pins.json`,
+review the fetched npm publication time and SHA-512 integrity, and replace
+`corpus/registry-pins.json` with the reviewed candidate. Remove unused entries
+when removing fixtures. The updater only fetches metadata for explicitly supplied
+new pins; normal tests do not fetch metadata or advance the cutoff. Run
+`node --test corpus/registry-cutoff.test.mjs` to check all fixture dependency
+maps and metadata. The cutoff update is deterministic and reviewable in the
+committed pins; it is not a substitute for verifying registry data or a lockfile.
+
+The installation test runs TypeScript before
 and after applying `xray --fix` in both isolated and global virtual stores with
 hoisting disabled. Each run checks that dry-run does not write, existing settings
 and comments survive, and repeating the fix is idempotent. After reinstall, the

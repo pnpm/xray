@@ -82,6 +82,11 @@ xray /path/to/project --trace -- node reproduce.cjs
 ```
 
 The command runs in the selected project and keeps its output and exit status.
+Plain tracing keeps the command in the foreground so it receives terminal
+interrupts directly. On interruption it allows ten seconds to finish and keeps
+observations collected so far. Verification uses an isolated process group and
+stops its descendants before restoring files; these runners deliberately use
+different interruption policies.
 Xray reports failed resolutions from installed packages on stderr, including
 computed imports a static scan cannot name. Some failures are caught optional
 integrations, so tracing alone does not change workspace settings. To select
@@ -101,6 +106,16 @@ already-declared dependencies also produce diagnostics instead of caller repairs
 Custom loaders or
 processes that replace `NODE_OPTIONS` can bypass the hook. Runtime observations
 include a filename and specifier; static findings also have line and column.
+
+Findings outside the default repair graph are labelled `deep-import-only` in
+text and carry `deepImportOnly: true` in JSON. They remain visible in reports;
+`--fix --all-files` includes them when you intentionally audit deep imports.
+The label describes static reachability, not whether an application uses them.
+
+Plain CSS imports and Sass/Less imports passed through as CSS are relative URLs,
+including paths such as `pkg/theme.css`. They do not establish an npm dependency.
+The explicit `~pkg/...` bundler convention still does. Preprocessor module loads
+such as Sass `@use` retain package resolution.
 
 ## Fixing what it finds
 

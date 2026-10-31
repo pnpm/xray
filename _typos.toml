@@ -1,2 +1,6 @@
 [files]
-extend-exclude = ["vendor/flow-parser/flow_parser.js"]
+extend-exclude = [
+  "vendor/flow-parser/flow_parser.js",
+  "THIRD_PARTY_NOTICES",
+  "licenses/rust-overrides/",
+]
