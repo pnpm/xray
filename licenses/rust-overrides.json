@@ -1,0 +1,150 @@
+{
+  "block2@0.6.2": {
+    "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+    "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/b4167b582b2f75f9a1be75495c41b765344fd03c/LICENSE.md",
+    "supplement_spdx": true
+  },
+  "dispatch2@0.3.1": {
+    "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+    "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md",
+    "supplement_spdx": true
+  },
+  "objc2-encode@4.1.0": {
+    "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+    "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md",
+    "supplement_spdx": true
+  },
+  "objc2@0.6.5": {
+    "file": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54.txt",
+    "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+    "source": "https://raw.githubusercontent.com/madsmtm/objc2/d7d2fa23ceaa5e6096c923b081040e5d81b3b9df/LICENSE.md",
+    "supplement_spdx": true
+  },
+  "oxc_allocator@0.144.0": {
+    "file": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3.txt",
+    "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc/b6f1458dece6bbd7f934d1d26c049d0d0c2bd68c/LICENSE",
+    "supplement_spdx": false
+  },
+  "oxc_ast@0.144.0": {
+    "file": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3.txt",
+    "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc/b6f1458dece6bbd7f934d1d26c049d0d0c2bd68c/LICENSE",
+    "supplement_spdx": false
+  },
+  "oxc_ast_macros@0.144.0": {
+    "file": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3.txt",
+    "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc/b6f1458dece6bbd7f934d1d26c049d0d0c2bd68c/LICENSE",
+    "supplement_spdx": false
+  },
+  "oxc_ast_visit@0.144.0": {
+    "file": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3.txt",
+    "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc/b6f1458dece6bbd7f934d1d26c049d0d0c2bd68c/LICENSE",
+    "supplement_spdx": false
+  },
+  "oxc_data_structures@0.144.0": {
+    "file": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3.txt",
+    "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc/b6f1458dece6bbd7f934d1d26c049d0d0c2bd68c/LICENSE",
+    "supplement_spdx": false
+  },
+  "oxc_diagnostics@0.144.0": {
+    "file": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3.txt",
+    "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc/b6f1458dece6bbd7f934d1d26c049d0d0c2bd68c/LICENSE",
+    "supplement_spdx": false
+  },
+  "oxc_ecmascript@0.144.0": {
+    "file": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3.txt",
+    "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc/b6f1458dece6bbd7f934d1d26c049d0d0c2bd68c/LICENSE",
+    "supplement_spdx": false
+  },
+  "oxc_estree@0.144.0": {
+    "file": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3.txt",
+    "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc/b6f1458dece6bbd7f934d1d26c049d0d0c2bd68c/LICENSE",
+    "supplement_spdx": false
+  },
+  "oxc_index@5.0.0": {
+    "file": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3.txt",
+    "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc-index-vec/8e09fe324eb6df02f56e4eacdfac958930300380/LICENSE",
+    "supplement_spdx": false
+  },
+  "oxc_parser@0.144.0": {
+    "file": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3.txt",
+    "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc/b6f1458dece6bbd7f934d1d26c049d0d0c2bd68c/LICENSE",
+    "supplement_spdx": false
+  },
+  "oxc_regular_expression@0.144.0": {
+    "file": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3.txt",
+    "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc/b6f1458dece6bbd7f934d1d26c049d0d0c2bd68c/LICENSE",
+    "supplement_spdx": false
+  },
+  "oxc_semantic@0.144.0": {
+    "file": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3.txt",
+    "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc/b6f1458dece6bbd7f934d1d26c049d0d0c2bd68c/LICENSE",
+    "supplement_spdx": false
+  },
+  "oxc_span@0.144.0": {
+    "file": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3.txt",
+    "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc/b6f1458dece6bbd7f934d1d26c049d0d0c2bd68c/LICENSE",
+    "supplement_spdx": false
+  },
+  "oxc_str@0.144.0": {
+    "file": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3.txt",
+    "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc/b6f1458dece6bbd7f934d1d26c049d0d0c2bd68c/LICENSE",
+    "supplement_spdx": false
+  },
+  "oxc_syntax@0.144.0": {
+    "file": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3.txt",
+    "sha256": "95ced5ecf1133fbf41d409b5555c86c344f83f3b019926057ddbc07cfdcc27b3",
+    "source": "https://raw.githubusercontent.com/oxc-project/oxc/b6f1458dece6bbd7f934d1d26c049d0d0c2bd68c/LICENSE",
+    "supplement_spdx": false
+  },
+  "raffia@0.13.0": {
+    "file": "586c6ae31e7ead7b33e3644ea8cba231c940c7739d0cbed3d5d14a4f046d82dd.txt",
+    "sha256": "586c6ae31e7ead7b33e3644ea8cba231c940c7739d0cbed3d5d14a4f046d82dd",
+    "source": "https://raw.githubusercontent.com/g-plane/raffia/f5cfbbdff33e4c1370940a48a76d26e5202b151d/LICENSE",
+    "supplement_spdx": false
+  },
+  "raffia_macro@0.2.0": {
+    "file": "586c6ae31e7ead7b33e3644ea8cba231c940c7739d0cbed3d5d14a4f046d82dd.txt",
+    "sha256": "586c6ae31e7ead7b33e3644ea8cba231c940c7739d0cbed3d5d14a4f046d82dd",
+    "source": "https://raw.githubusercontent.com/g-plane/raffia/c6cf6c661324f82422d7976ca035f9b5634f768e/LICENSE",
+    "supplement_spdx": false
+  },
+  "siphasher@1.0.3": {
+    "file": "c962ee4d1d05ddc138b202b2540219ebc57893fcf97b364852094a9a94ce1365.txt",
+    "sha256": "c962ee4d1d05ddc138b202b2540219ebc57893fcf97b364852094a9a94ce1365",
+    "source": "https://raw.githubusercontent.com/jedisct1/rust-siphash/451f67d73a772cba325728109bbfa247750ed076/COPYING",
+    "supplement_spdx": true
+  },
+  "windows-link@0.2.1": {
+    "file": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+    "source": "https://raw.githubusercontent.com/microsoft/windows-rs/d468916ac27a36fb8a12bafc1bf5c0ec2fe92238/crates/libs/link/license-mit",
+    "supplement_spdx": false
+  },
+  "windows-sys@0.61.2": {
+    "file": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383.txt",
+    "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+    "source": "https://raw.githubusercontent.com/microsoft/windows-rs/32c3144490c016fe496a0aed769bce60987a2e9d/crates/libs/sys/license-mit",
+    "supplement_spdx": false
+  },
+  "yaml-edit@0.3.5": {
+    "generic": true,
+    "reason": "Published manifest declares Apache-2.0; upstream revision contains no license or copyright file."
+  }
+}
