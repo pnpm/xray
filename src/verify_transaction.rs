@@ -465,12 +465,19 @@ impl Snapshot {
                         return Err(error).with_context(|| format!("removing {}", path.display()))
                     }
                 },
-                FileState::Present { .. } => {
-                    staged
+                FileState::Present { permissions, .. } => {
+                    let restored = staged
                         .remove(path)
                         .expect("restoration was staged")
                         .persist(path)
                         .with_context(|| format!("restoring {}", path.display()))?;
+                    // On Windows tempfile::persist resets file attributes to
+                    // NORMAL before renaming. Apply permissions to the open
+                    // file handle so a path replacement cannot redirect this.
+                    permissions
+                        .apply(&restored)
+                        .with_context(|| format!("restoring permissions on {}", path.display()))?;
+                    restored.sync_all()?;
                 }
             }
         }
