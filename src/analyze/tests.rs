@@ -441,3 +441,42 @@ fn javascript_invalid_utf8_is_decoded_like_node_and_dependencies_are_found() {
     let report = analyze(root.path(), Scope::Declared).unwrap().unwrap();
     assert!(report.findings.iter().any(|finding| finding.dependency == "missing-package"));
 }
+
+#[test]
+fn report_marks_only_findings_outside_the_default_repair_graph() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    write(&root.path().join("package.json"), &manifest("sample", r#", "main": "index.js""#));
+    write(&root.path().join("index.js"), "require('entry-only'); require('shared');");
+    write(&root.path().join("test.js"), "require('deep-only'); require('shared');");
+    let report = analyze(root.path(), Scope::Declared).unwrap().unwrap();
+    let scopes: Vec<_> = report
+        .findings
+        .iter()
+        .map(|finding| (finding.dependency.as_str(), finding.deep_import_only))
+        .collect();
+    assert_eq!(scopes, [("deep-only", true), ("entry-only", false), ("shared", false)]);
+    let json = crate::report::as_json(std::slice::from_ref(&report), 1, &[]).unwrap();
+    assert!(json.contains(r#""deepImportOnly": true"#));
+    assert!(crate::report::as_text(&[report]).contains("deep-import-only"));
+    let repairs = super::analyze_for_repair(root.path(), Scope::Declared).unwrap().unwrap();
+    assert!(repairs.findings.iter().all(|finding| finding.dependency != "deep-only"));
+    let all = super::analyze_for_repair(root.path(), Scope::EveryFile).unwrap().unwrap();
+    assert!(all.findings.iter().any(|finding| finding.dependency == "deep-only"));
+}
+
+#[test]
+fn plain_css_and_preprocessor_css_imports_do_not_invent_package_requirements() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    write(&root.path().join("package.json"), &manifest("sample", ""));
+    for extension in ["css", "scss", "less"] {
+        write(
+            &root.path().join(format!("style.{extension}")),
+            "@import 'some-package/theme.css'; @import '~explicit-package/theme.css';",
+        );
+    }
+    let report = analyze(root.path(), Scope::Declared).unwrap().unwrap();
+    assert_eq!(report.findings.len(), 1);
+    assert_eq!(report.findings[0].dependency, "explicit-package");
+}

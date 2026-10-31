@@ -212,16 +212,9 @@ fn normalize_ie_star_properties(source: &str) -> String {
 enum Lookup {
     /// The preprocessor loads the file, so a bare path can name a package.
     Load,
-    /// Hand-written CSS: the path is a URL relative to the stylesheet, which
-    /// bundlers also resolve as a package. A single file name (`reset.css`) is
-    /// read as a sibling file; webpack's `~` prefix or a package subpath
-    /// (`pkg/base.css`) asks for a package.
-    CssUrl,
-    /// A preprocessor leaves the rule in its output untouched — a Sass
-    /// `@import` of a `.css` file, a `url()` or with a media query, or a Less
-    /// `(css)` import — or may skip it, as with Less `(optional)`. Nothing has
-    /// to be installed for the stylesheet to build; only webpack's `~` prefix
-    /// still names a package.
+    /// Plain CSS imports (including preprocessor pass-through rules) are URLs
+    /// relative to the stylesheet. Only the explicit bundler `~` prefix names
+    /// a package here; a bare slash is not proof of a package requirement.
     PassThrough,
 }
 
@@ -233,7 +226,7 @@ fn collect(statements: &[Statement<'_>], syntax: Syntax, out: &mut Vec<StyleRefe
                     match prelude {
                         AtRulePrelude::Import(import) => {
                             let lookup = match syntax {
-                                Syntax::Css => Lookup::CssUrl,
+                                Syntax::Css => Lookup::PassThrough,
                                 Syntax::Less => less_lookup(&import.href, &[]),
                                 Syntax::Scss | Syntax::Sass => {
                                     let plain_css =
@@ -381,7 +374,6 @@ fn add(value: &str, offset: usize, kind: StyleKind, lookup: Lookup, out: &mut Ve
     let as_written = value.starts_with(['.', '~'])
         || match lookup {
             Lookup::Load => true,
-            Lookup::CssUrl => value.trim_start_matches('@').contains('/'),
             Lookup::PassThrough => false,
         };
     // A path that names no package is still followed to a local file, so it

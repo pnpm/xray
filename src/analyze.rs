@@ -62,15 +62,7 @@ fn analyze_inner(package_dir: &Path, scope: Scope, strict: bool) -> Result<Analy
     // part of the surface — including the tests, whether the author meant that
     // or not.
     let encapsulated = manifest.is_encapsulated();
-    let files: Vec<PathBuf> = match scope {
-        Scope::Declared if strict => {
-            reachable_files_for_repair(package_dir, &manifest)?.into_iter().collect()
-        }
-        Scope::Declared if encapsulated => {
-            reachable_files(package_dir, &manifest).into_iter().collect()
-        }
-        _ => scannable_files(package_dir).collect(),
-    };
+    let files = analysis_files(package_dir, &manifest, scope, strict)?;
 
     let mut missing: BTreeMap<String, (Origin, BTreeSet<Evidence>)> = BTreeMap::new();
     let canonical_root = package_dir.canonicalize()?;
@@ -158,8 +150,48 @@ fn analyze_inner(package_dir: &Path, scope: Scope, strict: bool) -> Result<Analy
         }
     }
 
-    let report = build_report(&manifest, missing);
+    let mut report = build_report(&manifest, missing);
+    if !strict && !encapsulated {
+        mark_deep_imports(package_dir, &manifest, &canonical_root, report.as_mut());
+    }
     Ok(AnalysisOutcome { report, diagnostics })
+}
+
+fn analysis_files(
+    package_dir: &Path,
+    manifest: &Manifest,
+    scope: Scope,
+    strict: bool,
+) -> Result<Vec<PathBuf>> {
+    Ok(match scope {
+        Scope::Declared if strict => {
+            reachable_files_for_repair(package_dir, manifest)?.into_iter().collect()
+        }
+        Scope::Declared if manifest.is_encapsulated() => {
+            reachable_files(package_dir, manifest).into_iter().collect()
+        }
+        _ => scannable_files(package_dir).collect(),
+    })
+}
+
+/// Classify only when reachability is known; preserve incomplete diagnostics.
+fn mark_deep_imports(
+    package_dir: &Path,
+    manifest: &Manifest,
+    canonical_root: &Path,
+    report: Option<&mut PackageReport>,
+) {
+    let Some(report) = report else { return };
+    let Ok(files) = reachable_files_for_repair(package_dir, manifest) else { return };
+    let files: BTreeSet<_> =
+        files.into_iter().filter_map(|path| path.canonicalize().ok()).collect();
+    for finding in &mut report.findings {
+        finding.deep_import_only = !finding.evidence.is_empty()
+            && finding
+                .evidence
+                .iter()
+                .all(|evidence| !files.contains(&canonical_root.join(&evidence.file)));
+    }
 }
 
 fn import_targets(
@@ -203,6 +235,7 @@ fn build_report(
     let findings: Vec<Finding> = missing
         .into_iter()
         .map(|(name, (origin, evidence))| Finding {
+            deep_import_only: false,
             declared_range: manifest.dev_dependencies.get(&name).cloned(),
             severity: if manifest.dev_dependencies.contains_key(&name) {
                 Severity::DevDependency

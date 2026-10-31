@@ -35,6 +35,9 @@ pub enum DiagnosticKind {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Finding {
+    /// All evidence is outside the default repair graph; absence makes no claim.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub deep_import_only: bool,
     pub dependency: String,
     /// The range the package pinned in its own devDependencies, when it has one.
     /// It is the closest thing to an author-sanctioned version for the peer.
@@ -77,6 +80,7 @@ pub fn merge_reports(reports: Vec<PackageReport>) -> Vec<PackageReport> {
         for finding in report.findings {
             if let Some(existing) = dependencies.get_mut(&finding.dependency) {
                 existing.origin = existing.origin.merged(finding.origin);
+                existing.deep_import_only &= finding.deep_import_only;
                 existing.evidence.extend(finding.evidence);
                 if existing.declared_range != finding.declared_range {
                     existing.declared_range = None;
@@ -128,7 +132,12 @@ pub fn as_text(reports: &[PackageReport]) -> String {
                 Origin::Types => "types",
                 Origin::Both => "code and types",
             };
-            let _ = writeln!(out, "  {} — {note}, used in {where_from}", finding.dependency);
+            let scope = if finding.deep_import_only {
+                " (deep-import-only; use --all-files to repair)"
+            } else {
+                ""
+            };
+            let _ = writeln!(out, "  {} — {note}, used in {where_from}{scope}", finding.dependency);
             for evidence in &finding.evidence {
                 if evidence.line == 0 {
                     let _ = writeln!(out, "    {} ({})", evidence.file, evidence.specifier);

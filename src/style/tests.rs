@@ -19,7 +19,7 @@ fn parses_css_and_less_imports_but_not_external_urls() {
     )
     .unwrap();
     assert_eq!(css.len(), 1);
-    assert_eq!(css[0].specifier, "pkg/base.css");
+    assert_eq!(css[0].specifier, "./pkg/base.css");
     let less = parse(Path::new("test.less"), "@import (reference) 'pkg/styles.less';").unwrap();
     assert_eq!(less[0].specifier, "pkg/styles.less");
 }
@@ -56,7 +56,14 @@ fn plain_css_file_names_are_relative_urls() {
     let source = "@import 'reset.css'; @import url(base.css); @import './local.css'; @import 'pkg/base.css'; @import '@scope/pkg/base.css'; @import '~pkg';";
     assert_eq!(
         specifiers("test.css", source),
-        ["./reset.css", "./base.css", "./local.css", "pkg/base.css", "@scope/pkg/base.css", "~pkg"],
+        [
+            "./reset.css",
+            "./base.css",
+            "./local.css",
+            "./pkg/base.css",
+            "./@scope/pkg/base.css",
+            "~pkg"
+        ],
     );
 }
 
@@ -89,7 +96,7 @@ fn parses_legacy_ie_star_properties_without_changing_reference_offsets() {
     let source = "/* *fake: x; */\n@import 'pkg/style.css';\na { content: '*fake: x'; *zoom: 1; *color: red; }";
     let references = parse(Path::new("legacy.css"), source).unwrap();
     assert_eq!(references.len(), 1);
-    assert_eq!(references[0].specifier, "pkg/style.css");
+    assert_eq!(references[0].specifier, "./pkg/style.css");
     assert_eq!(references[0].offset, source.find("'pkg/style.css'").unwrap());
     assert!(parse(Path::new("legacy.css"), "a { *zoom: ; @import ; }").is_err());
 }

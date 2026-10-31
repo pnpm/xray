@@ -5,6 +5,7 @@ fn medplum() -> Vec<PackageReport> {
     vec![PackageReport {
         package: "@medplum/core@5.1.15".to_string(),
         findings: vec![Finding {
+            deep_import_only: false,
             dependency: "@medplum/fhirtypes".to_string(),
             declared_range: Some("5.1.15".to_string()),
             severity: Severity::DevDependency,
@@ -41,6 +42,7 @@ fn versions_are_separate_and_repeated_peer_contexts_are_merged() {
     reports.push(PackageReport {
         package: "@medplum/core@5.1.15".into(),
         findings: vec![Finding {
+            deep_import_only: false,
             dependency: "another".into(),
             declared_range: None,
             severity: Severity::Undeclared,
@@ -51,6 +53,7 @@ fn versions_are_separate_and_repeated_peer_contexts_are_merged() {
     reports.push(PackageReport {
         package: "@medplum/core@6.0.0".into(),
         findings: vec![Finding {
+            deep_import_only: false,
             dependency: "third".into(),
             declared_range: None,
             severity: Severity::Undeclared,
@@ -77,6 +80,7 @@ fn packages_without_a_semver_version_get_no_extension() {
     let report = |package: &str| PackageReport {
         package: package.to_string(),
         findings: vec![Finding {
+            deep_import_only: false,
             dependency: "missing".to_string(),
             declared_range: None,
             severity: Severity::Undeclared,
@@ -111,6 +115,7 @@ fn text_separates_the_two_kinds_of_finding() {
         package: "pkg@1.0.0".to_string(),
         findings: vec![
             Finding {
+                deep_import_only: false,
                 dependency: "known".to_string(),
                 declared_range: Some("^1".to_string()),
                 severity: Severity::DevDependency,
@@ -118,6 +123,7 @@ fn text_separates_the_two_kinds_of_finding() {
                 evidence: std::collections::BTreeSet::new(),
             },
             Finding {
+                deep_import_only: false,
                 dependency: "unknown".to_string(),
                 declared_range: None,
                 severity: Severity::Undeclared,
@@ -139,6 +145,7 @@ fn publisher_local_ranges_are_not_copied_to_consumers() {
         let reports = vec![PackageReport {
             package: "example@1.0.0".into(),
             findings: vec![Finding {
+                deep_import_only: false,
                 dependency: "helper".into(),
                 declared_range: Some(range.into()),
                 severity: Severity::DevDependency,
@@ -162,6 +169,7 @@ fn peer_context_duplicates_merge_origins_without_losing_findings() {
         PackageReport {
             package: "example@1.0.0".into(),
             findings: vec![Finding {
+                deep_import_only: false,
                 dependency: "helper".into(),
                 declared_range: Some("^1".into()),
                 severity: Severity::DevDependency,
@@ -172,6 +180,7 @@ fn peer_context_duplicates_merge_origins_without_losing_findings() {
         PackageReport {
             package: "example@1.0.0".into(),
             findings: vec![Finding {
+                deep_import_only: false,
                 dependency: "helper".into(),
                 declared_range: Some("^1".into()),
                 severity: Severity::DevDependency,
@@ -203,4 +212,14 @@ fn portable_ranges_follow_npm_semver_including_prereleases() {
     ] {
         assert!(!crate::report::registry_range(range), "{range}");
     }
+}
+
+#[test]
+fn merging_peer_contexts_retains_deep_only_label_only_when_every_context_agrees() {
+    let mut deep = medplum();
+    deep[0].findings[0].deep_import_only = true;
+    let merged = super::merge_reports([deep.clone(), deep.clone()].concat());
+    assert!(merged[0].findings[0].deep_import_only);
+    let merged = super::merge_reports([deep, medplum()].concat());
+    assert!(!merged[0].findings[0].deep_import_only);
 }

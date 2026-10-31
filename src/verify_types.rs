@@ -100,6 +100,7 @@ pub fn collect(project: &Path, packages: &[PathBuf]) -> Result<Vec<Candidate>> {
         let report = PackageReport {
             package: owner.id(),
             findings: vec![Finding {
+                deep_import_only: false,
                 dependency: provider.name.clone(),
                 declared_range: (item.kind == "types").then(|| provider.version.clone()),
                 severity: Severity::Undeclared,
