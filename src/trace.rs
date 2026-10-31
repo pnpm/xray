@@ -30,6 +30,21 @@ pub struct TraceResult {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// Preserve ordinary exit codes and use the shell convention for Unix signals.
+pub fn status_code(status: ExitStatus) -> u8 {
+    if let Some(code) = status.code() {
+        return u8::try_from(code).unwrap_or(1);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        if let Some(signal) = status.signal() {
+            return u8::try_from(128 + signal).unwrap_or(1);
+        }
+    }
+    1
+}
+
 /// Run a command with the Node preload active. Its streams and exit status are
 /// unchanged. Every captured resolution failure may have been caught by code.
 pub fn run(command: &[OsString], packages: &[PathBuf], project: &Path) -> Result<TraceResult> {

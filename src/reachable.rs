@@ -51,6 +51,10 @@ fn reachable_files_inner(
         if !seen.insert(file.clone()) {
             continue;
         }
+        // A browser map can replace a package entry itself, even when no
+        // source file imports that entry internally. Without an exports map,
+        // bundlers such as esbuild apply this to the package's main file.
+        queue.extend(browser_entry_files(manifest, &root, &file));
         if let Some(companion) = declaration_companion(&file) {
             if companion.starts_with(&root) {
                 queue.push(companion);
@@ -131,6 +135,22 @@ fn reachable_files_inner(
         }
     }
     Ok(seen)
+}
+
+fn browser_entry_files(manifest: &Manifest, root: &Path, file: &Path) -> Vec<PathBuf> {
+    if manifest.is_encapsulated() || scan::is_declaration(file) || scan::is_stylesheet(file) {
+        return Vec::new();
+    }
+    let Ok(relative) = file.strip_prefix(root) else {
+        return Vec::new();
+    };
+    let specifier = format!("./{}", relative.to_string_lossy().replace('\\', "/"));
+    browser_replacements(manifest, root, root, &specifier)
+        .into_iter()
+        .filter(|target| target.starts_with("./"))
+        .filter_map(|target| resolve_relative(root, &target))
+        .filter(|target| target.starts_with(root))
+        .collect()
 }
 
 fn resolve_esm_relative(from: &Path, specifier: &str) -> Option<PathBuf> {

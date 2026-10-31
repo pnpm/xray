@@ -228,6 +228,11 @@ fn write_repairs(
         );
     }
     if args.dry_run {
+        declaration_patch::validate(
+            &workspace.join("pnpm-workspace.yaml"),
+            &proposed,
+            &patch_plan,
+        )?;
         print!("{proposed}");
         for (path, content) in &patch_plan.artifacts {
             eprintln!("Proposed {}:\n{content}", path.display());
@@ -260,5 +265,5 @@ fn run_trace(args: &Args, workspace: &Path, providers: &[PathBuf]) -> Result<Exi
         configuration::apply(workspace, &mut reports)?;
         write_repairs(args, workspace, &reports, providers)?;
     }
-    Ok(ExitCode::from(u8::try_from(observed.status.code().unwrap_or(1)).unwrap_or(1)))
+    Ok(ExitCode::from(trace::status_code(observed.status)))
 }

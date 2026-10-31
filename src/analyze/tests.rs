@@ -157,6 +157,30 @@ fn browser_mappings_are_followed_only_for_reached_runtime_references() {
 }
 
 #[test]
+fn browser_mapping_of_package_main_is_followed_for_repair() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest(
+            "pkg",
+            r#","main":"server.js","types":"types.d.ts","browser":{"./server.js":"./browser.js","./unused.js":"./other.js","./types.d.ts":"./other.d.ts"}"#,
+        ),
+    );
+    write(&dir.join("server.js"), "require('node-dependency');");
+    write(&dir.join("browser.js"), "require('browser-dependency');");
+    write(&dir.join("unused.js"), "module.exports = 1;");
+    write(&dir.join("other.js"), "require('unused-dependency');");
+    write(&dir.join("types.d.ts"), "export declare const value: string;");
+    write(&dir.join("other.d.ts"), "import 'not-a-type-replacement';");
+    let report = crate::analyze::analyze_for_repair(&dir, Scope::Declared).unwrap().unwrap();
+    let names: Vec<_> = report.findings.iter().map(|finding| finding.dependency.as_str()).collect();
+    assert_eq!(names, ["browser-dependency", "node-dependency"]);
+    assert_eq!(report.findings[0].evidence.first().unwrap().file, "browser.js");
+}
+
+#[test]
 fn findings_include_all_precise_source_references_and_import_aliases() {
     use crate::fixtures::{manifest, write};
     let root = tempfile::tempdir().unwrap();

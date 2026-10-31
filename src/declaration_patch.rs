@@ -102,9 +102,13 @@ fn diff(path: &str, original: &str, replacement: &str) -> String {
     output
 }
 
-/// Validate the complete settings edit before creating any persistent artifact.
-/// Existing patch files are immutable unless their contents already match.
-pub fn apply(workspace: &Path, proposed: &str, plan: &PatchPlan) -> Result<bool> {
+/// Validate a proposed edit without creating any files. Dry runs and writes
+/// use the same checks, including existing patch content and symlink checks.
+pub fn validate(workspace: &Path, proposed: &str, plan: &PatchPlan) -> Result<()> {
+    preflight(workspace, proposed, plan).map(|_| ())
+}
+
+fn preflight(workspace: &Path, proposed: &str, plan: &PatchPlan) -> Result<(String, PathBuf)> {
     let original = match std::fs::read_to_string(workspace) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -113,7 +117,9 @@ pub fn apply(workspace: &Path, proposed: &str, plan: &PatchPlan) -> Result<bool>
     repair::merge(&original, proposed)?;
     let root = workspace.parent().context("workspace has no parent")?.canonicalize()?;
     let patch_dir = root.join("patches");
-    if std::fs::symlink_metadata(&patch_dir).is_ok_and(|metadata| metadata.file_type().is_symlink())
+    if !plan.artifacts.is_empty()
+        && std::fs::symlink_metadata(&patch_dir)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
     {
         bail!("workspace patch directory must not be a symlink");
     }
@@ -135,6 +141,12 @@ pub fn apply(workspace: &Path, proposed: &str, plan: &PatchPlan) -> Result<bool>
             bail!("existing patch {} conflicts with declaration repair", path.display());
         }
     }
+    Ok((original, root))
+}
+
+/// Existing patch files are immutable unless their contents already match.
+pub fn apply(workspace: &Path, proposed: &str, plan: &PatchPlan) -> Result<bool> {
+    let (original, root) = preflight(workspace, proposed, plan)?;
     let mut created = Vec::new();
     let applied = (|| -> Result<bool> {
         for (relative, content) in &plan.artifacts {

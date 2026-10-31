@@ -109,3 +109,44 @@ fn rejects_symlinked_declarations_and_patch_directories() {
         .is_err());
     assert!(!actual.join("example.patch").exists());
 }
+
+#[test]
+fn dry_run_preflight_rejects_the_same_conflicting_patch_as_apply() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("pnpm-workspace.yaml");
+    let original = "packages:\n  - packages/*\n";
+    std::fs::write(&workspace, original).unwrap();
+    std::fs::create_dir(root.path().join("patches")).unwrap();
+    let path = root.path().join("patches/example.patch");
+    std::fs::write(&path, "existing patch").unwrap();
+    let proposed = "patchedDependencies:\n  'example@1.0.0': patches/example.patch\n";
+    let plan = super::PatchPlan {
+        configuration: proposed.into(),
+        artifacts: std::collections::BTreeMap::from([(
+            "patches/example.patch".into(),
+            "different patch".into(),
+        )]),
+    };
+    assert!(super::validate(&workspace, proposed, &plan).is_err());
+    assert!(apply(&workspace, proposed, &plan).is_err());
+    assert_eq!(std::fs::read_to_string(&workspace).unwrap(), original);
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "existing patch");
+}
+
+#[cfg(unix)]
+#[test]
+fn unrelated_symlinked_patch_directory_does_not_block_extension_only_repair() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    symlink(outside.path(), root.path().join("patches")).unwrap();
+    let workspace = root.path().join("pnpm-workspace.yaml");
+    let proposed = "packageExtensions:\n  'example@1.0.0':\n    dependencies:\n      other: '*'\n";
+    let plan = super::PatchPlan {
+        configuration: String::new(),
+        artifacts: std::collections::BTreeMap::new(),
+    };
+    super::validate(&workspace, proposed, &plan).unwrap();
+    assert!(apply(&workspace, proposed, &plan).unwrap());
+    assert!(std::fs::read_to_string(workspace).unwrap().contains("example@1.0.0"));
+}

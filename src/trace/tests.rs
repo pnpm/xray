@@ -197,3 +197,10 @@ fn diagnoses_undefined_package_import_mapping() {
     assert_eq!(result.diagnostics.len(), 1);
     assert!(result.diagnostics[0].message.contains("ERR_PACKAGE_IMPORT_NOT_DEFINED"));
 }
+
+#[cfg(unix)]
+#[test]
+fn shell_signal_status_is_preserved() {
+    let status = Command::new("sh").args(["-c", "kill -TERM $$"]).status().unwrap();
+    assert_eq!(super::status_code(status), 143);
+}
