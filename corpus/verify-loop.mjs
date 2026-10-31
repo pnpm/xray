@@ -68,6 +68,21 @@ try {
     const label = globalStore ? 'global' : 'isolated'
     const { root, app } = await fixture(label, globalStore)
     const program = ['packages/app/render.cjs']
+    if (globalStore) {
+      const cliOnly = await fixture(`${label}-cli-layout-only`, true)
+      const cliWorkspace = join(cliOnly.root, 'pnpm-workspace.yaml')
+      const cliConfig = (await readFile(cliWorkspace, 'utf8')).replace('hoist: false\n', '').replace('enableGlobalVirtualStore: true\n', '')
+      await writeFile(cliWorkspace, cliConfig)
+      const cliBefore = await snapshot(cliOnly.root)
+      const marker = join(cliOnly.root, 'must-not-run')
+      const refusal = run(binary, ['--verify', cliOnly.root, '--', process.execPath, '-e', "require('node:fs').writeFileSync('must-not-run','ran'); process.exitCode=73"], cliOnly.root)
+      assert(refusal.status === 1 && /layout differs from effective configuration/i.test(refusal.stderr), `${label}: CLI-only layout was not rejected: ${refusal.stdout}\n${refusal.stderr}`)
+      assert(await optionalFile(marker) === null, `${label}: user command ran before layout refusal`)
+      await assertSnapshot(cliOnly.root, cliBefore, `${label}: CLI-only layout refusal`)
+      const stillGlobal = await realpath(join(cliOnly.app, 'node_modules/@vue/consolidate'))
+      assert(relative(cliOnly.root, stillGlobal).startsWith('..'), `${label}: refusal changed installation layout`)
+      console.log(`PASS ${label}: CLI-only global layout refuses before running the user command`)
+    }
     const initial = run(process.execPath, program, root)
     assert(initial.status !== 0 && initial.stderr.includes("Cannot find module 'pug'"), `${label}: expected missing pug before repair: ${initial.stderr}`)
     const before = await snapshot(root)
@@ -98,6 +113,22 @@ try {
     const restored = run(process.execPath, ['packages/app/render.cjs'], bad.root)
     assert(restored.status !== 0 && restored.stderr.includes("Cannot find module 'pug'"), `${label}: original dependency graph not restored`)
     console.log(`PASS ${label}: unrelated failure restores settings, locks, patch artifacts, and original graph`)
+
+    if (globalStore) {
+      const drift = await fixture(`${label}-layout-drift`, true)
+      const driftBefore = await snapshot(drift.root)
+      await writeFile(join(drift.app, 'drift.cjs'), "const { spawnSync } = require('node:child_process'); const fail = (err) => { if (err) { console.error(err); process.exitCode = 1; return } const result = spawnSync('pnpm', ['install', '--ignore-scripts', '--frozen-lockfile', '--config.enable-global-virtual-store=false'], { stdio: 'inherit' }); if (result.status !== 0) { console.error('drift install failed'); process.exitCode = 2; return } console.error('intentional layout drift'); process.exitCode = 73 }; process.on('unhandledRejection', fail); try { require('@vue/consolidate').pug.render('p hello', {}, fail) } catch (err) { fail(err) }\n")
+      const driftInitial = run(process.execPath, ['packages/app/drift.cjs'], drift.root)
+      assert(driftInitial.status !== 0 && driftInitial.stderr.includes("Cannot find module 'pug'"), `${label}: drift fixture baseline did not fail on pug`)
+      const driftResult = run(binary, ['--verify', drift.root, '--', process.execPath, 'packages/app/drift.cjs'], drift.root)
+      assert(driftResult.status === 1 && /layout changed during verification/i.test(driftResult.stderr), `${label}: layout drift was not rejected: ${driftResult.stdout}\n${driftResult.stderr}`)
+      await assertSnapshot(drift.root, driftBefore, `${label}: layout drift rollback`)
+      const driftReal = await realpath(join(drift.app, 'node_modules/@vue/consolidate'))
+      assert(relative(drift.root, driftReal).startsWith('..'), `${label}: original global layout was not restored: ${driftReal}`)
+      const driftRestored = run(process.execPath, ['packages/app/render.cjs'], drift.root)
+      assert(driftRestored.status !== 0 && driftRestored.stderr.includes("Cannot find module 'pug'"), `${label}: drift rollback did not restore original graph`)
+      console.log(`PASS ${label}: command-induced layout drift is detected and original layout restored`)
+    }
 
     const separate = await fixture(`${label}-separate-lock`, globalStore, true)
     const separateBefore = await snapshot(separate.root)
@@ -172,9 +203,10 @@ try {
     const installBefore = await snapshot(installFailure.root)
     const fakeBin = join(temp, `fake-pnpm-${label}`)
     await mkdir(fakeBin, { recursive: true })
-    await writeFile(join(fakeBin, 'pnpm'), '#!/bin/sh\nprintf "%s\\n" "$@" > "$XRAY_VERIFY_PNPM_LOG"\nexit 42\n', { mode: 0o755 })
+    await writeFile(join(fakeBin, 'pnpm'), '#!/bin/sh\nif [ "$1" != install ]; then exec "$XRAY_VERIFY_REAL_PNPM" "$@"; fi\nprintf "%s\\n" "$@" > "$XRAY_VERIFY_PNPM_LOG"\nexit 42\n', { mode: 0o755 })
     const installLog = join(temp, `pnpm-${label}.log`)
-    const env = { ...testEnv, PATH: `${fakeBin}:${process.env.PATH}`, XRAY_VERIFY_PNPM_LOG: installLog }
+    const realPnpm = checked('which', ['pnpm'], installFailure.root).stdout.trim()
+    const env = { ...testEnv, PATH: `${fakeBin}:${process.env.PATH}`, XRAY_VERIFY_PNPM_LOG: installLog, XRAY_VERIFY_REAL_PNPM: realPnpm }
     const failedInstall = run(binary, ['--verify', installFailure.root, '--', process.execPath, 'packages/app/render.cjs'], installFailure.root, env)
     const pnpmArgs = await readFile(installLog, 'utf8')
     assert(failedInstall.status === 1 && pnpmArgs.includes('install'), `${label}: simulated install failure did not propagate: ${failedInstall.stdout}\n${failedInstall.stderr}`)
@@ -186,6 +218,7 @@ try {
 
     const cancellation = await fixture(`${label}-cancel`, globalStore)
     const cancelBefore = await snapshot(cancellation.root)
+    const recoveryBefore = new Set((await readdir(temp)).filter((entry) => entry.startsWith('xray-recovery-')))
     await writeFile(join(cancellation.app, 'block.cjs'), `const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const fail = (error) => { if (error) console.error(error); process.exitCode = 1 };
@@ -232,7 +265,7 @@ try { require('@vue/consolidate').pug.render('p hello', {}, (err) => {
     assert(heartbeatAtRollback !== null && heartbeatAtRollback === lastHeartbeat, `${label}: descendant was not stopped before rollback started`)
     await new Promise((resolveWait) => setTimeout(resolveWait, 300))
     assert(await optionalFile(heartbeat) === lastHeartbeat, `${label}: descendant process continued running after cancellation`)
-    const recoveryDirectories = (await readdir(temp)).filter((entry) => entry.startsWith('xray-recovery-'))
+    const recoveryDirectories = (await readdir(temp)).filter((entry) => entry.startsWith('xray-recovery-') && !recoveryBefore.has(entry))
     assert(recoveryDirectories.length === 0, `${label}: successful cancellation left recovery journals: ${recoveryDirectories}`)
     console.log(`PASS ${label}: SIGINT terminates the command group before restoring the original graph`)
 
@@ -255,6 +288,24 @@ try { require('@vue/consolidate').pug.render('p hello', {}, (err) => {
     const docusConfig = await readFile(join(docusRoot, 'pnpm-workspace.yaml'), 'utf8')
     assert(docusConfig.includes('@docusaurus/core@3.10.2') && docusConfig.includes('history') && docusConfig.includes('@docusaurus/types') && !docusConfig.includes('@generated/'), `${label}: incorrect Docusaurus repair: ${docusConfig}`)
     console.log(`PASS ${label}: verified compiler repairs public Docusaurus deep-path types without generated aliases`)
+
+    const unoRoot = join(temp, `${label}-unocss`)
+    const unoApp = join(unoRoot, 'packages/app')
+    await mkdir(unoApp, { recursive: true })
+    await writeFile(join(unoRoot, 'pnpm-workspace.yaml'), `# preserve policy\npackages:\n  - packages/*\nhoist: false\nignoreScripts: true\nenableGlobalVirtualStore: ${globalStore}\nminimumReleaseAge: 0\nstoreDir: ${join(temp, 'store')}\n`)
+    await writeFile(join(unoApp, 'package.json'), JSON.stringify({ name: `xray-unocss-${label}`, private: true, type: 'module', dependencies: { '@unocss/autocomplete': '66.11.0', '@unocss/core': '66.11.0' } }))
+    await writeFile(join(unoApp, 'index.mjs'), "import { searchUsageBoundary } from '@unocss/autocomplete'; const result = searchUsageBoundary('hello', 2); if (result.content !== 'hello') throw new Error('wrong autocomplete result');\n")
+    checked('pnpm', ['install', '--ignore-scripts'], unoRoot)
+    const unoActual = await realpath(join(unoApp, 'node_modules/@unocss/autocomplete'))
+    assert(relative(unoRoot, unoActual).startsWith('..') === globalStore, `${label}: wrong UnoCSS virtual-store layout`)
+    const unoBaseline = run(process.execPath, ['packages/app/index.mjs'], unoRoot)
+    assert(unoBaseline.status !== 0 && unoBaseline.stderr.includes("Cannot find package '@unocss/core'"), `${label}: expected missing UnoCSS core: ${unoBaseline.stdout}\n${unoBaseline.stderr}`)
+    const unoFix = run(binary, ['--verify', unoRoot, '--', process.execPath, 'packages/app/index.mjs'], unoRoot)
+    assert(unoFix.status === 0, `${label}: UnoCSS verified repair failed: ${unoFix.stdout}\n${unoFix.stderr}`)
+    checked(process.execPath, ['packages/app/index.mjs'], unoRoot)
+    const unoConfig = await readFile(join(unoRoot, 'pnpm-workspace.yaml'), 'utf8')
+    assert(unoConfig.includes('@unocss/autocomplete@66.11.0') && unoConfig.includes('@unocss/core') && unoConfig.includes('# preserve policy'), `${label}: missing UnoCSS extension: ${unoConfig}`)
+    console.log(`PASS ${label}: verified ESM UnoCSS repair restores actual autocomplete behavior`)
 
     const sandboxRoot = join(temp, `${label}-sandbox`)
     const sandboxApp = join(sandboxRoot, 'packages/app')

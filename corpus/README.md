@@ -50,7 +50,9 @@ regeneration with compatible TypeScript and Node types, and checks that an
 incompatible Node types version produces no patch or workspace changes. The
 browser mapping case checks esbuild bundling with selected host builtins external;
 it does not claim a working browser runtime. Synthetic regeneration checks reject
-changes to unused exported types and projects with TypeScript references.
+changes to unused exported types, missing or cyclic TypeScript references, stale
+reference outputs, and repairs that introduce downstream type errors. Built
+project-reference graphs are verified in their separate compiler contexts.
 
 ```sh
 cargo build

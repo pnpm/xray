@@ -117,7 +117,12 @@ final installed graph again. An already successful command leaves settings
 unchanged. The compiler can also identify a missing installed `@types` provider
 when a package already declares its untyped runtime dependency.
 
-Verification requires existing pnpm lockfiles. Unsuccessful searches restore
+Verification requires existing pnpm lockfiles and a reproducible installed layout.
+Persist hoist and virtual store settings in pnpm configuration before running it;
+settings supplied only to an earlier install command are refused. Xray checks
+that installs and verification commands preserve that layout.
+
+Unsuccessful searches restore
 workspace settings, root and importer locks, generated patches, and the locked
 dependency graph, returning the original command's failure status. User edits
 to managed files are preserved as conflicts. Interruptions stop the command's
@@ -126,8 +131,11 @@ from that group require their own cleanup.
 
 The command may run repeatedly. Installation follows existing lifecycle-script
 and trust policies; command and lifecycle outputs outside the managed files
-remain. Search defaults to 32 proposals and 32 verification attempts; adjust
+remain. Search defaults to 32 proposal attempts and 32 verification attempts; adjust
 `--verify-max-candidates` and `--verify-max-attempts` to change those limits.
+Failed installation trials count toward the verification limit. Group-removal
+checks reduce interacting repairs; the retained set passes single-removal checks
+without claiming the globally smallest solution for arbitrary commands.
 
 A recovery journal is persisted before mutation. If rollback encounters an edit
 or installation failure, xray retains that journal and prints its location:

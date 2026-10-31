@@ -16,6 +16,7 @@ mod style;
 mod trace;
 mod verify;
 mod verify_candidates;
+mod verify_layout;
 mod verify_lease;
 mod verify_signals;
 mod verify_transaction;
@@ -102,7 +103,7 @@ struct Args {
     #[arg(long, requires = "verify", default_value_t = 32, value_parser = clap::value_parser!(u16).range(1..=256))]
     verify_max_attempts: u16,
 
-    /// Maximum distinct proposals considered during a verified repair.
+    /// Maximum proposal attempts, including retries after the graph changes.
     #[arg(long, requires = "verify", default_value_t = 32, value_parser = clap::value_parser!(u16).range(1..=256))]
     verify_max_candidates: u16,
 

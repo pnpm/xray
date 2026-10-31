@@ -11,7 +11,73 @@ use std::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FileState {
     Absent,
-    Present { bytes: Vec<u8>, permissions: Permissions },
+    Present { bytes: Vec<u8>, permissions: FilePermissions },
+}
+
+/// Compare and restore only permissions exposed by the platform. Windows
+/// `Permissions` also retains unrelated file attributes from its source file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FilePermissions {
+    #[cfg(unix)]
+    value: Permissions,
+    #[cfg(not(unix))]
+    readonly: bool,
+}
+
+impl FilePermissions {
+    #[cfg(unix)]
+    const fn from_permissions(permissions: Permissions) -> Self {
+        Self { value: permissions }
+    }
+
+    #[cfg(not(unix))]
+    fn from_permissions(permissions: Permissions) -> Self {
+        Self { readonly: permissions.readonly() }
+    }
+
+    fn from_mode(mode: u32) -> Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            if mode > 0o177_777 {
+                bail!("invalid recovery permissions");
+            }
+            Ok(Self { value: Permissions::from_mode(mode) })
+        }
+        #[cfg(not(unix))]
+        {
+            if mode > 1 {
+                bail!("invalid recovery permissions");
+            }
+            Ok(Self { readonly: mode == 1 })
+        }
+    }
+
+    fn mode(&self) -> u32 {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            self.value.mode()
+        }
+        #[cfg(not(unix))]
+        {
+            u32::from(self.readonly)
+        }
+    }
+
+    fn apply(&self, file: &fs::File) -> Result<()> {
+        #[cfg(unix)]
+        {
+            file.set_permissions(self.value.clone())?;
+        }
+        #[cfg(not(unix))]
+        {
+            let mut permissions = file.metadata()?.permissions();
+            permissions.set_readonly(self.readonly);
+            file.set_permissions(permissions)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -21,6 +87,8 @@ struct Manifest {
     root: PathBuf,
     files: Vec<Entry>,
     owned_blobs: BTreeSet<String>,
+    #[serde(default)]
+    layout: Option<crate::verify_layout::Layout>,
 }
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -63,20 +131,7 @@ fn read_recovery_blob(
     if format!("{:x}", Sha256::digest(&bytes)) != blob.sha256 {
         bail!("recovery blob checksum mismatch");
     }
-    #[cfg(unix)]
-    let permissions = {
-        use std::os::unix::fs::PermissionsExt as _;
-        Permissions::from_mode(blob.mode)
-    };
-    #[cfg(not(unix))]
-    let permissions = {
-        let mut p = metadata.permissions();
-        if blob.mode > 1 {
-            bail!("invalid recovery permissions");
-        }
-        p.set_readonly(blob.mode == 1);
-        p
-    };
+    let permissions = FilePermissions::from_mode(blob.mode)?;
     Ok(FileState::Present { bytes, permissions })
 }
 
@@ -92,6 +147,7 @@ pub struct Snapshot {
     files: BTreeMap<PathBuf, TrackedFile>,
     lockfiles: BTreeSet<PathBuf>,
     owned_patch_dir: Option<same_file::Handle>,
+    layout: Option<crate::verify_layout::Layout>,
 }
 
 impl Snapshot {
@@ -103,6 +159,7 @@ impl Snapshot {
             files: BTreeMap::new(),
             lockfiles: BTreeSet::new(),
             owned_patch_dir: None,
+            layout: None,
         };
         snapshot.track(root.join("pnpm-workspace.yaml"))?;
         let mut projects = BTreeSet::from([root.clone()]);
@@ -155,6 +212,18 @@ impl Snapshot {
 
     pub fn workspace_root(&self) -> &Path {
         &self.root
+    }
+
+    /// Record the original pnpm layout before persisting the journal.
+    pub fn set_layout(&mut self, layout: crate::verify_layout::Layout) {
+        self.layout = Some(layout);
+    }
+
+    /// Older journals lack a layout proof and cannot safely reinstall a graph.
+    pub fn recovery_layout(&self) -> Result<&crate::verify_layout::Layout> {
+        self.layout
+            .as_ref()
+            .context("recovery journal lacks the original pnpm layout; manual recovery is required")
     }
 
     /// All managed files, including generated artifacts.
@@ -235,13 +304,7 @@ impl Snapshot {
                             .file_name()
                             .and_then(|name| name.to_str())
                             .context("recovery blob has no name")?;
-                        #[cfg(unix)]
-                        let mode = {
-                            use std::os::unix::fs::PermissionsExt as _;
-                            permissions.mode()
-                        };
-                        #[cfg(not(unix))]
-                        let mode = u32::from(permissions.readonly());
+                        let mode = permissions.mode();
                         Ok(
                             serde_json::json!({ "file": name, "mode": mode, "sha256": format!("{:x}", Sha256::digest(bytes)) }),
                         )
@@ -262,7 +325,7 @@ impl Snapshot {
                 "lockfile": self.lockfiles.contains(path),
             }));
         }
-        let manifest = serde_json::json!({ "schemaVersion": 1, "root": self.root, "files": entries, "ownedBlobs": owned });
+        let manifest = serde_json::json!({ "schemaVersion": 2, "root": self.root, "files": entries, "ownedBlobs": owned, "layout": self.layout });
         let mut file = tempfile::NamedTempFile::new_in(directory)?;
         serde_json::to_writer_pretty(&mut file, &manifest)?;
         file.as_file().sync_all()?;
@@ -282,7 +345,7 @@ impl Snapshot {
             bail!("recovery manifest must be a regular file");
         }
         let manifest: Manifest = serde_json::from_slice(&fs::read(manifest_path)?)?;
-        if manifest.schema_version != 1 {
+        if ![1, 2].contains(&manifest.schema_version) {
             bail!("unsupported recovery schema");
         }
         let root = manifest.root.canonicalize().context("resolving recovery workspace")?;
@@ -291,7 +354,11 @@ impl Snapshot {
             files: BTreeMap::new(),
             lockfiles: BTreeSet::new(),
             owned_patch_dir: None,
+            layout: None,
         };
+        if manifest.schema_version == 2 {
+            snapshot.layout = manifest.layout;
+        }
         for entry in manifest.files {
             let relative = &entry.path;
             if relative.components().any(|part| !matches!(part, Component::Normal(_)))
@@ -376,7 +443,7 @@ impl Snapshot {
             if let FileState::Present { bytes, permissions } = &tracked.before {
                 let parent = path.parent().context("transaction path has no parent")?;
                 let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-                temp.as_file().set_permissions(permissions.clone())?;
+                permissions.apply(temp.as_file())?;
                 temp.write_all(bytes)?;
                 temp.as_file().sync_all()?;
                 staged.insert(path.clone(), temp);
@@ -474,7 +541,10 @@ impl Snapshot {
         if !metadata.is_file() {
             bail!("transaction path is not a regular file: {}", path.display());
         }
-        Ok(FileState::Present { bytes: fs::read(path)?, permissions: metadata.permissions() })
+        Ok(FileState::Present {
+            bytes: fs::read(path)?,
+            permissions: FilePermissions::from_permissions(metadata.permissions()),
+        })
     }
 }
 

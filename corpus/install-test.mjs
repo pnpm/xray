@@ -479,7 +479,7 @@ try {
       }
       await writeFile(join(regenRoot, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'esnext', module: 'nodenext', moduleResolution: 'nodenext', noEmit: true }, references: [{ path: './other' }], include: ['index.ts'] }))
       const references = run(binary, ['--fix', '--regenerate-types', regenRoot], regenRoot)
-      if (references.status === 0 || !references.stderr.includes('project references are not supported') || await readFile(regenWorkspace, 'utf8') !== guardedSettings || await readFile(guardPath, 'utf8').then(() => true, () => false)) throw new Error(`${label}: project references were not rejected safely: ${references.status} ${references.stderr}`)
+      if (references.status === 0 || !references.stderr.includes('project reference is missing') || await readFile(regenWorkspace, 'utf8') !== guardedSettings || await readFile(guardPath, 'utf8').then(() => true, () => false)) throw new Error(`${label}: invalid project references were not rejected safely: ${references.status} ${references.stderr}`)
       console.log(`PASS ${label}: regeneration rejects API erosion and project references without writes`)
     }
   }

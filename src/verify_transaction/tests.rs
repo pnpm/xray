@@ -267,3 +267,62 @@ fn recovery_directory_has_a_protected_dacl() {
     }
     Snapshot::remove_recovery(&recovery).unwrap();
 }
+
+#[cfg(windows)]
+#[test]
+fn recovery_preserves_and_checks_windows_readonly_permission() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().canonicalize().unwrap().join("pnpm-workspace.yaml");
+    fs::write(&path, "before").unwrap();
+    let mut original_permissions = fs::metadata(&path).unwrap().permissions();
+    original_permissions.set_readonly(true);
+    fs::set_permissions(&path, original_permissions).unwrap();
+    let mut snapshot = Snapshot::capture(root.path(), &[]).unwrap();
+    let recovery = snapshot.save_recovery().unwrap();
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_readonly(false);
+    fs::set_permissions(&path, permissions).unwrap();
+    fs::write(&path, "after").unwrap();
+    snapshot.checkpoint(std::slice::from_ref(&path)).unwrap();
+    snapshot.refresh_recovery(&recovery).unwrap();
+    let mut loaded = Snapshot::load_recovery(&recovery).unwrap();
+    let mut changed = fs::metadata(&path).unwrap().permissions();
+    changed.set_readonly(true);
+    fs::set_permissions(&path, changed).unwrap();
+    assert!(loaded.restore().is_err(), "readonly changes must be detected");
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_readonly(false);
+    fs::set_permissions(&path, permissions).unwrap();
+    loaded.restore().unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"before");
+    assert!(fs::metadata(&path).unwrap().permissions().readonly());
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_readonly(false);
+    fs::set_permissions(&path, permissions).unwrap();
+    Snapshot::remove_recovery(&recovery).unwrap();
+}
+
+#[test]
+fn journal_roundtrips_layout_and_legacy_requires_manual_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let modules = root.path().join("node_modules");
+    fs::create_dir_all(modules.join(".pnpm")).unwrap();
+    let store = root.path().join("store");
+    fs::create_dir_all(&store).unwrap();
+    fs::write(modules.join(".modules.yaml"), format!("nodeLinker: isolated\nstoreDir: '{}'\nvirtualStoreDir: .pnpm\npublicHoistPattern: []\n", store.display())).unwrap();
+    let layout = crate::verify_layout::Layout::capture(root.path()).unwrap();
+    let mut snapshot = Snapshot::capture(root.path(), &[]).unwrap();
+    snapshot.set_layout(layout);
+    let recovery = snapshot.save_recovery().unwrap();
+    let loaded = Snapshot::load_recovery(&recovery).unwrap();
+    loaded.recovery_layout().unwrap().validate_recovery(root.path()).unwrap();
+    let manifest_path = recovery.join("recovery.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["schemaVersion"] = 1.into();
+    manifest.as_object_mut().unwrap().remove("layout");
+    fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let legacy = Snapshot::load_recovery(&recovery).unwrap();
+    assert!(legacy.recovery_layout().is_err());
+    Snapshot::remove_recovery(&recovery).unwrap();
+}

@@ -373,5 +373,21 @@
     ],
     "maxDiagnosticLines": 0,
     "evidence": "The manifest declares runtime ms, so static phantom-dependency analysis must not report ms. Strict TypeScript can still require an installed @types/ms provider; the verified command test covers that separate defect."
+  },
+  {
+    "name": "@unocss/autocomplete",
+    "version": "66.11.0",
+    "url": "https://registry.npmjs.org/@unocss/autocomplete/-/autocomplete-66.11.0.tgz",
+    "sha512": "fa5c70a16d89f222df0499236f5784cda9a1580b6bb041146a219b74eca5e4840df027a48a051f149f1456526494255a47288ad516c8bd558af920bf901524be",
+    "expected": [
+      {
+        "dependency": "@unocss/core",
+        "severity": "devDependency",
+        "origin": "both",
+        "declaredRange": "66.11.0"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "Published ESM entry imports @unocss/core, which is only a devDependency. A real Nuxt ui-templates build failed under persistent global virtual store and passed after xray generated an optional peer."
   }
 ]

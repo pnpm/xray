@@ -500,3 +500,56 @@ a consumer cannot use it. Unknown malformed files should continue to surface
 rather than silently making a package clean. Any change needs tests for public
 subpaths, wildcard exports, bins and declaration companions; `--all-files` should
 continue to expose assets and diagnostics.
+
+### Nuxt global-store suite: layout switching and a verified UnoCSS repair
+
+At the same Nuxt commit `4036aa703ebc4001458082e50df749d45a199e57`, the
+previous broad global-store result could not be attributed solely to package
+resolution. A controlled serial rerun kept Node 24.21.0 and pnpm 12.15.0 fixed,
+used a frozen lockfile, disabled lifecycle scripts for the initial install, and
+ran the same unit and renderer projects with `--maxWorkers=1`. The test-name
+pattern excluded the three known `jiti-fallback` install-command spelling
+assertions. With local isolated store and `hoist=false`, the suite had 3,139
+passed, one expected failure, 21 skipped, and one 60-second `builder:watch`
+timeout. With the global-store option supplied only to the install command,
+the same serial test command had 29 failures; this was not a clean comparison:
+`node_modules/vitest` pointed into the global store before the run but into the
+workspace's local `.pnpm` directory afterward. The same watcher timeout also
+occurred in the local run.
+
+The layout change is reproducible without the broad suite. Nuxt's checked-in
+workspace setting `verifyDepsBeforeRun: install` allows pnpm to update the
+installation before a script. The test
+`packages/ui-templates/test/templates.spec.ts` runs a nested `pnpm build`.
+Starting from a global-store install created using command-line layout flags,
+that test passed 9/9, but its nested command switched the Vitest realpath from
+`/tmp/.pnpm-store/v11/links/...` to the project's `node_modules/.pnpm/...`.
+Thus the earlier full run had processes that had already loaded modules from
+the global store while later resolutions used a newly linked local store.
+That mixed installation is consistent with the observed failed identity and
+mock assertions; it does not prove each earlier failure independently.
+
+Persisting only the requested `hoist: false` and
+`enableGlobalVirtualStore: true` layout settings in the disposable checkout
+prevented that switch. It exposed a separate published package failure:
+`@unocss/autocomplete@66.11.0` imports `@unocss/core`, but declares it only as
+a dev dependency. With the persistent global layout and no extension, the
+focused ui-templates build failed with `ERR_MODULE_NOT_FOUND` for that module.
+Xray generated a version-specific optional peer extension for `@unocss/core`.
+After adding that one extension and reinstalling with scripts disabled, the
+same ui-templates test passed 9/9 and the Vitest realpath stayed in the global
+store. The public tarball is
+`https://registry.npmjs.org/@unocss/autocomplete/-/autocomplete-66.11.0.tgz`,
+with integrity
+`sha512-+lxwoW2J8iLfBJkjb1eEzamhWAtrsEEUaiGbdOyl5IQN8CekigUfFJ8UVlJklCVaRyiK1RbIvVWK+SC/kBUkvg==`.
+
+With those persistent layout settings and the single UnoCSS extension, the
+serial global-store unit-plus-renderer command produced the same result as the
+serial local-store command: 3,139 passed, one expected failure, 21 skipped, and
+the same single builder-watch timeout. The Vitest realpath was global both
+before and after the suite. Three jiti-fallback cases were excluded by the name
+pattern; the other skips are reported by Vitest. The extension required a
+lockfile update, so this final repaired graph is not byte-identical to the
+original lockfile. These results isolate a reproducible layout-switching hazard
+and one repaired package defect; they do not claim a complete Nuxt test pass or
+establish that every prior broad-run failure had the same cause.

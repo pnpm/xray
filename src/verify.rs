@@ -3,12 +3,14 @@ use crate::{
     analyze::Scope,
     declaration_patch, discovery, report, trace,
     verify_candidates::{self, Candidate},
+    verify_layout::Layout,
     verify_lease::Lease,
     verify_signals::{self, SignalGuard},
     verify_transaction::Snapshot,
     workspace,
 };
 use anyhow::{bail, Context, Result};
+use sha2::{Digest as _, Sha256};
 use std::{
     collections::BTreeSet,
     ffi::OsString,
@@ -30,6 +32,7 @@ pub struct Options<'a> {
 struct Session<'a> {
     options: Options<'a>,
     snapshot: Snapshot,
+    layout: Layout,
     managed: Vec<PathBuf>,
     dirty: bool,
     attempts: usize,
@@ -41,10 +44,14 @@ struct Session<'a> {
 
 pub fn run(options: Options<'_>) -> Result<ExitCode> {
     let signals = SignalGuard::install()?;
+    let layout = Layout::capture(options.workspace)?;
+    layout.preflight()?;
     eprintln!("Verification baseline: running the command before changing settings.");
     let packages = discovery::installed_packages(options.workspace)?;
     let baseline =
         trace::run_cancellable(options.command, &packages, options.project, signals.flag())?;
+    layout.verify_unchanged()?;
+    layout.preflight()?;
     if signals.flag().load(Ordering::SeqCst) {
         return Ok(ExitCode::from(130));
     }
@@ -55,7 +62,8 @@ pub fn run(options: Options<'_>) -> Result<ExitCode> {
     show_observations(&baseline);
     let initial_status = trace::status_code(baseline.status);
     let importers = workspace::projects(options.workspace)?;
-    let snapshot = Snapshot::capture(options.workspace, &importers)?;
+    let mut snapshot = Snapshot::capture(options.workspace, &importers)?;
+    snapshot.set_layout(layout.clone());
     let mut managed = snapshot.lockfiles();
     if !managed.iter().any(|path| path.is_file()) {
         bail!("verified repair requires an existing pnpm lockfile to restore the dependency graph");
@@ -64,6 +72,7 @@ pub fn run(options: Options<'_>) -> Result<ExitCode> {
     let mut session = Session {
         options,
         snapshot,
+        layout,
         managed,
         dirty: false,
         attempts: 0,
@@ -127,6 +136,8 @@ impl Session<'_> {
         {
             self.check_cancelled()?;
             self.snapshot.verify_unchanged()?;
+            self.layout.verify_unchanged()?;
+            self.layout.preflight()?;
             let packages = discovery::installed_packages(self.options.workspace)?;
             let candidates = verify_candidates::collect(
                 self.options.project,
@@ -137,18 +148,17 @@ impl Session<'_> {
                 self.options.regenerate_types,
             )?;
             let Some(candidate) = candidates.into_iter().find(|candidate| {
-                !self
-                    .considered
-                    .contains(&format!("{}\n{}", candidate.key, candidate.configuration))
+                !self.considered.contains(&attempt_identity(candidate, &applied))
                     && !applied.iter().any(|existing: &Candidate| existing.key == candidate.key)
             }) else {
                 break;
             };
-            self.considered.insert(format!("{}\n{}", candidate.key, candidate.configuration));
+            self.considered.insert(attempt_identity(&candidate, &applied));
             eprintln!("Verification proposal: {}", candidate.key);
             self.register_artifacts(&candidate)?;
             let mut trial = applied.clone();
             trial.push(candidate);
+            self.attempts += 1;
             let installed = self.configure(&trial, false)?;
             self.check_cancelled()?;
             if !installed {
@@ -158,7 +168,6 @@ impl Session<'_> {
                 }
                 continue;
             }
-            self.attempts += 1;
             let result = trace::run_cancellable(
                 self.options.command,
                 &discovery::installed_packages(self.options.workspace)?,
@@ -167,6 +176,8 @@ impl Session<'_> {
             )?;
             self.check_cancelled()?;
             self.snapshot.verify_unchanged()?;
+            self.layout.verify_unchanged()?;
+            self.layout.preflight()?;
             if result.status.success() {
                 return self.minimize(trial);
             }
@@ -183,20 +194,21 @@ impl Session<'_> {
     }
 
     fn minimize(&mut self, mut retained: Vec<Candidate>) -> Result<Option<Vec<Candidate>>> {
-        let mut index = 0;
-        while index < retained.len() {
+        let mut policy = RemovalPolicy::new(retained.len());
+        while let Some(range) = policy.next() {
             self.check_cancelled()?;
             if self.attempts >= self.options.max_attempts {
-                eprintln!("Verification limit prevents proving a minimal repair; rolling back.");
+                eprintln!("Verification limit prevents completing removal checks; rolling back.");
                 return Ok(None);
             }
+            let removed = &retained[range.clone()];
+            eprintln!("Checking removal of {} proposal(s).", removed.len());
             let mut trial = retained.clone();
-            let removed = trial.remove(index);
-            eprintln!("Checking whether {} is necessary.", removed.key);
+            trial.drain(range);
+            self.attempts += 1;
             let installed = self.configure(&trial, trial.is_empty())?;
             self.check_cancelled()?;
             let succeeded = if installed {
-                self.attempts += 1;
                 let result = trace::run_cancellable(
                     self.options.command,
                     &discovery::installed_packages(self.options.workspace)?,
@@ -205,19 +217,18 @@ impl Session<'_> {
                 )?;
                 self.check_cancelled()?;
                 self.snapshot.verify_unchanged()?;
+                self.layout.verify_unchanged()?;
+                self.layout.preflight()?;
                 result.status.success()
             } else {
                 false
             };
             if succeeded {
                 retained = trial;
-                index = 0;
-            } else {
-                if !self.configure(&retained, false)? {
-                    bail!("could not reinstall the verified dependency graph");
-                }
-                index += 1;
+            } else if !self.configure(&retained, false)? {
+                bail!("could not reinstall the verified dependency graph");
             }
+            policy.record(succeeded, retained.len());
         }
         // Recheck the exact graph that will remain after minimization, rather
         // than relying on a command result from an earlier graph installation.
@@ -233,6 +244,8 @@ impl Session<'_> {
         )?;
         self.check_cancelled()?;
         self.snapshot.verify_unchanged()?;
+        self.layout.verify_unchanged()?;
+        self.layout.preflight()?;
         Ok(final_result.status.success().then_some(retained))
     }
 
@@ -251,6 +264,8 @@ impl Session<'_> {
 
     fn configure(&mut self, candidates: &[Candidate], frozen: bool) -> Result<bool> {
         self.check_cancelled()?;
+        self.layout.verify_unchanged()?;
+        self.layout.preflight()?;
         self.protect_recovery()?;
         self.snapshot.restore()?;
         self.checkpoint(&self.managed.clone())?;
@@ -272,6 +287,8 @@ impl Session<'_> {
         let installed = install(self.options.workspace, frozen, self.cancelled)?;
         self.checkpoint(&self.snapshot.lockfiles())?;
         self.snapshot.verify_unchanged()?;
+        self.layout.verify_unchanged()?;
+        self.layout.preflight()?;
         Ok(installed)
     }
 
@@ -281,9 +298,12 @@ impl Session<'_> {
         self.checkpoint(&self.managed.clone())?;
         if self.dirty {
             eprintln!("Reinstalling the original locked dependency graph.");
+            self.layout.preflight()?;
             let restored = install(self.options.workspace, true, self.cancelled)?;
             self.checkpoint(&self.snapshot.lockfiles())?;
             self.snapshot.verify_unchanged()?;
+            self.layout.verify_unchanged()?;
+            self.layout.preflight()?;
             // In separate-lockfile workspaces an empty root can acquire a new
             // lockfile on reinstall. Preserve its original absence as well.
             self.snapshot.restore()?;
@@ -359,6 +379,62 @@ fn install(workspace: &Path, frozen: bool, cancelled: &AtomicBool) -> Result<boo
     Ok(status.success())
 }
 
+/// Removal checks establish single-removal minimality, not a global minimum.
+struct RemovalPolicy {
+    len: usize,
+    chunk: usize,
+    start: usize,
+}
+
+impl RemovalPolicy {
+    const fn new(len: usize) -> Self {
+        Self { len, chunk: len.div_ceil(2), start: 0 }
+    }
+
+    fn next(&self) -> Option<std::ops::Range<usize>> {
+        (self.chunk > 0 && self.start < self.len)
+            .then_some(self.start..(self.start + self.chunk).min(self.len))
+    }
+
+    const fn record(&mut self, succeeded: bool, len: usize) {
+        if succeeded {
+            *self = Self::new(len);
+        } else {
+            self.start += self.chunk;
+            if self.start >= self.len {
+                self.chunk /= 2;
+                self.start = 0;
+            }
+        }
+    }
+}
+
+fn candidate_identity(candidate: &Candidate) -> [u8; 32] {
+    fn add(hash: &mut Sha256, bytes: &[u8]) {
+        hash.update((bytes.len() as u64).to_le_bytes());
+        hash.update(bytes);
+    }
+    let mut hash = Sha256::new();
+    add(&mut hash, candidate.key.as_bytes());
+    add(&mut hash, candidate.configuration.as_bytes());
+    for (path, content) in &candidate.artifacts {
+        add(&mut hash, path.as_os_str().as_encoded_bytes());
+        add(&mut hash, content.as_bytes());
+    }
+    hash.finalize().into()
+}
+
+fn attempt_identity(candidate: &Candidate, applied: &[Candidate]) -> String {
+    let mut identities: Vec<_> = applied.iter().map(candidate_identity).collect();
+    identities.sort_unstable();
+    let mut hash = Sha256::new();
+    hash.update(candidate_identity(candidate));
+    for identity in identities {
+        hash.update(identity);
+    }
+    format!("{:x}", hash.finalize())
+}
+
 pub fn recover(project: &Path, journal: &Path) -> Result<ExitCode> {
     let lease = Lease::acquire(journal)?;
     let mut snapshot = Snapshot::load_recovery(journal)?;
@@ -368,15 +444,21 @@ pub fn recover(project: &Path, journal: &Path) -> Result<ExitCode> {
             snapshot.workspace_root().display(),
         );
     }
+    let layout = snapshot.recovery_layout()?.clone();
+    layout.validate_recovery(snapshot.workspace_root())?;
+    layout.preflight()?;
     let signals = SignalGuard::install()?;
     let paths = snapshot.tracked_paths();
     snapshot.restore()?;
     snapshot.checkpoint(&paths)?;
     snapshot.refresh_recovery(journal)?;
+    layout.preflight()?;
     let installed = install(snapshot.workspace_root(), true, signals.flag())?;
     snapshot.checkpoint(&snapshot.lockfiles())?;
     snapshot.refresh_recovery(journal)?;
     snapshot.verify_unchanged()?;
+    layout.verify_unchanged()?;
+    layout.preflight()?;
     snapshot.restore()?;
     snapshot.checkpoint(&paths)?;
     snapshot.refresh_recovery(journal)?;
@@ -406,3 +488,7 @@ fn show_observations(result: &trace::TraceResult) {
         eprintln!("Observed {}: {}: {}", diagnostic.package, diagnostic.file, diagnostic.message);
     }
 }
+
+#[cfg(test)]
+#[path = "verify/tests.rs"]
+mod tests;

@@ -19,7 +19,9 @@ code. It scores the reviewed expected dependencies as true positives or false
 negatives. Findings on clean controls are false positives. Other findings in
 broken packages are **unknown**, not assumed wrong; incomplete scans are also
 excluded from scoring and reported. Precision and recall apply only to these
-reviewed labels. A missing denominator is `null`.
+reviewed labels. A missing denominator is `null`. A separate
+[adjudication](adjudication.md) reviews the three additional findings without
+changing the frozen labels or reported metric.
 
 This hand-selected sample is small and biased toward declaration references and
 simple controls. It is not a random sample, does not estimate prevalence in npm,
