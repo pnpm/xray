@@ -77,3 +77,13 @@ fn invalid_extension_settings_cannot_hide_findings() {
         assert_eq!(reports.len(), 1);
     }
 }
+
+#[test]
+fn selectors_match_pnpm_prerelease_behavior() {
+    let version = node_semver::Version::parse("1.0.0-beta.1").unwrap();
+    assert!(super::matches_selector("example", "example", &version));
+    assert!(!super::matches_selector("example@*", "example", &version));
+    assert!(!super::matches_selector("example@^1.0.0", "example", &version));
+    assert!(super::matches_selector("example@1.0.0-beta.1", "example", &version));
+    assert!(super::matches_selector("example@>=1.0.0-0 <2", "example", &version));
+}

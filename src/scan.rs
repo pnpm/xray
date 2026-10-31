@@ -2,7 +2,8 @@ use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     Argument, BindingPattern, CallExpression, ExportAllDeclaration, ExportFromDeclaration,
     Expression, ImportDeclaration, ImportDeclarationSpecifier, ImportExpression, Program,
-    PropertyKey, TSExternalModuleReference, TSImportType, VariableDeclarator,
+    PropertyKey, TSExternalModuleReference, TSImportType, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_parser::Parser;
@@ -80,6 +81,7 @@ pub fn references(
         named: BTreeSet::new(),
         namespaces: BTreeSet::new(),
         scoping: semantic.scoping(),
+        constant: false,
     };
     factories.visit_program(&parsed);
     let mut require_bindings = RequireBindings {
@@ -87,13 +89,22 @@ pub fn references(
         namespaces: factories.namespaces,
         scoping: semantic.scoping(),
         bindings: BTreeSet::new(),
+        resolvers: BTreeSet::new(),
+        constant: false,
     };
-    require_bindings.visit_program(&parsed);
+    loop {
+        let count = require_bindings.bindings.len() + require_bindings.resolvers.len();
+        require_bindings.visit_program(&parsed);
+        if count == require_bindings.bindings.len() + require_bindings.resolvers.len() {
+            break;
+        }
+    }
     let mut collector = Collector {
         default_origin,
         found: BTreeSet::new(),
         scoping: semantic.scoping(),
         require_bindings: require_bindings.bindings,
+        resolve_bindings: require_bindings.resolvers,
     };
     collector.visit_program(&parsed);
     let mut found = collector.found;
@@ -334,6 +345,7 @@ struct Collector<'a> {
     found: BTreeSet<(Requirement, Origin, u32)>,
     scoping: &'a Scoping,
     require_bindings: BTreeSet<SymbolId>,
+    resolve_bindings: BTreeSet<SymbolId>,
 }
 
 impl Collector<'_> {
@@ -415,7 +427,9 @@ impl<'a> Visit<'a> for Collector<'_> {
     /// not a literal names a package only the running program knows, so there is
     /// nothing to report.
     fn visit_call_expression(&mut self, call: &CallExpression<'a>) {
-        if is_require(&call.callee, self.scoping, &self.require_bindings) {
+        if is_require(&call.callee, self.scoping, &self.require_bindings, &self.resolve_bindings)
+            || is_import_meta_resolve(&call.callee)
+        {
             if let Some(Argument::StringLiteral(literal)) = call.arguments.first() {
                 self.record(literal.value.as_str(), literal.span.start);
             }
@@ -424,22 +438,56 @@ impl<'a> Visit<'a> for Collector<'_> {
     }
 }
 
+fn is_import_meta_resolve(callee: &Expression<'_>) -> bool {
+    match callee {
+        Expression::StaticMemberExpression(member) => {
+            member.property.name == "resolve" && matches!(&member.object, Expression::ImportMeta(_))
+        }
+        Expression::ComputedMemberExpression(member) => {
+            matches!(&member.expression, Expression::StringLiteral(name) if name.value == "resolve")
+                && matches!(&member.object, Expression::ImportMeta(_))
+        }
+        _ => false,
+    }
+}
+
 fn is_require(
     callee: &Expression<'_>,
     scoping: &Scoping,
     require_bindings: &BTreeSet<SymbolId>,
+    resolve_bindings: &BTreeSet<SymbolId>,
 ) -> bool {
+    if is_loader(callee, scoping, require_bindings) {
+        return true;
+    }
+    match callee {
+        Expression::Identifier(name) => name
+            .reference_id
+            .get()
+            .and_then(|id| scoping.get_reference(id).symbol_id())
+            .is_some_and(|id| resolve_bindings.contains(&id)),
+        Expression::StaticMemberExpression(member) => {
+            member.property.name == "resolve"
+                && is_loader(&member.object, scoping, require_bindings)
+        }
+        Expression::ComputedMemberExpression(member) => {
+            matches!(&member.expression, Expression::StringLiteral(name) if name.value == "resolve")
+                && is_loader(&member.object, scoping, require_bindings)
+        }
+        _ => false,
+    }
+}
+
+fn is_loader(callee: &Expression<'_>, scoping: &Scoping, bindings: &BTreeSet<SymbolId>) -> bool {
     match callee {
         Expression::Identifier(name) => {
             match name.reference_id.get().and_then(|id| scoping.get_reference(id).symbol_id()) {
-                Some(id) => require_bindings.contains(&id),
+                Some(id) => bindings.contains(&id),
                 None => name.name == "require",
             }
         }
         Expression::StaticMemberExpression(member) => {
-            (member.property.name == "resolve"
-                && is_require(&member.object, scoping, require_bindings))
-                || (member.property.name == "require" && is_global_module(&member.object, scoping))
+            member.property.name == "require" && is_global_module(&member.object, scoping)
         }
         Expression::ComputedMemberExpression(member) => {
             matches!(&member.expression, Expression::StringLiteral(name) if name.value == "require")
@@ -467,9 +515,16 @@ struct RequireFactories<'a> {
     named: BTreeSet<SymbolId>,
     namespaces: BTreeSet<SymbolId>,
     scoping: &'a Scoping,
+    constant: bool,
 }
 
 impl<'a> Visit<'a> for RequireFactories<'_> {
+    fn visit_variable_declaration(&mut self, decl: &VariableDeclaration<'a>) {
+        let previous = self.constant;
+        self.constant = decl.kind == VariableDeclarationKind::Const;
+        walk::walk_variable_declaration(self, decl);
+        self.constant = previous;
+    }
     fn visit_import_declaration(&mut self, decl: &ImportDeclaration<'a>) {
         if matches!(decl.source.value.as_str(), "module" | "node:module") {
             if let Some(specifiers) = &decl.specifiers {
@@ -501,6 +556,10 @@ impl<'a> Visit<'a> for RequireFactories<'_> {
     }
 
     fn visit_variable_declarator(&mut self, decl: &VariableDeclarator<'a>) {
+        if !self.constant {
+            walk::walk_variable_declarator(self, decl);
+            return;
+        }
         if let (BindingPattern::ObjectPattern(pattern), Some(Expression::CallExpression(call))) =
             (&decl.id, &decl.init)
         {
@@ -537,9 +596,37 @@ struct RequireBindings<'a> {
     namespaces: BTreeSet<SymbolId>,
     scoping: &'a Scoping,
     bindings: BTreeSet<SymbolId>,
+    resolvers: BTreeSet<SymbolId>,
+    constant: bool,
 }
 
 impl<'a> Visit<'a> for RequireBindings<'_> {
+    fn visit_variable_declaration(&mut self, decl: &VariableDeclaration<'a>) {
+        if decl.kind == VariableDeclarationKind::Const {
+            for variable in &decl.declarations {
+                if let (BindingPattern::BindingIdentifier(binding), Some(initializer)) =
+                    (&variable.id, &variable.init)
+                {
+                    if let Some(id) = binding.symbol_id.get() {
+                        if is_loader(initializer, self.scoping, &self.bindings) {
+                            self.bindings.insert(id);
+                        } else if is_require(
+                            initializer,
+                            self.scoping,
+                            &self.bindings,
+                            &self.resolvers,
+                        ) {
+                            self.resolvers.insert(id);
+                        }
+                    }
+                }
+            }
+        }
+        let previous = self.constant;
+        self.constant = decl.kind == VariableDeclarationKind::Const;
+        walk::walk_variable_declaration(self, decl);
+        self.constant = previous;
+    }
     fn visit_variable_declarator(&mut self, decl: &VariableDeclarator<'a>) {
         if let (
             BindingPattern::BindingIdentifier(binding),
@@ -568,7 +655,7 @@ impl<'a> Visit<'a> for RequireBindings<'_> {
                 }
                 _ => false,
             };
-            if is_factory {
+            if is_factory && self.constant {
                 if let Some(id) = binding.symbol_id.get() {
                     self.bindings.insert(id);
                 }
@@ -580,7 +667,7 @@ impl<'a> Visit<'a> for RequireBindings<'_> {
 
 fn is_node_module_load(call: &CallExpression<'_>, scoping: &Scoping) -> bool {
     matches!(&call.callee, Expression::Identifier(_))
-        && is_require(&call.callee, scoping, &BTreeSet::new())
+        && is_require(&call.callee, scoping, &BTreeSet::new(), &BTreeSet::new())
         && matches!(call.arguments.first(), Some(Argument::StringLiteral(name)) if matches!(name.value.as_str(), "module" | "node:module"))
 }
 

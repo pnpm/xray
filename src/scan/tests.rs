@@ -187,6 +187,33 @@ fn collects_require_calls() {
 }
 
 #[test]
+fn constant_commonjs_aliases_follow_bindings_without_guessing_mutable_or_shadowed_values() {
+    let source = "const load = require; const again = load; const resolve = require.resolve; const also = resolve; again('loaded'); also('resolved'); let mutable = require; mutable('not-proven'); function f(require) { const load = require; load('shadowed'); }";
+    assert_eq!(script(source, "index.cjs"), ["loaded", "resolved"]);
+    let flow = format!("// @flow\n{source}");
+    assert_eq!(script(&flow, "index.js"), ["loaded", "resolved"]);
+    let reversed = "function f() { const again = load; again('nested'); } const load = require;";
+    assert_eq!(script(reversed, "index.js"), ["nested"]);
+    let computed = "const resolve = require['resolve']; resolve('computed');";
+    assert_eq!(script(computed, "index.js"), ["computed"]);
+}
+
+#[test]
+fn commonjs_aliases_match_node_runtime() {
+    let root = tempfile::tempdir().unwrap();
+    let package = root.path().join("node_modules/example");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("package.json"), r#"{"name":"example","main":"index.js"}"#)
+        .unwrap();
+    std::fs::write(package.join("index.js"), "module.exports = 42;").unwrap();
+    let source = "const load = require; const again = load; const resolve = require.resolve; if (again('example') !== 42 || !resolve('example')) process.exit(1);";
+    let entry = root.path().join("entry.cjs");
+    std::fs::write(&entry, source).unwrap();
+    assert!(std::process::Command::new("node").arg(entry).status().unwrap().success());
+    assert_eq!(script(source, "entry.cjs"), ["example"]);
+}
+
+#[test]
 fn module_require_is_recognized_only_for_the_unshadowed_commonjs_binding() {
     let source = "module.require('one'); module['require']('two'); function f(module) { module.require('hidden'); } const x = {require: () => {}}; x.require('ignored');";
     assert_eq!(script(source, "index.cjs"), ["one", "two"]);
@@ -197,6 +224,32 @@ fn module_require_is_recognized_only_for_the_unshadowed_commonjs_binding() {
         u32::try_from(source.find("'one'").unwrap()).unwrap(),
     );
     assert!(references.contains(&expected));
+}
+
+#[test]
+fn import_meta_resolve_detects_only_intrinsic_literal_calls() {
+    let source = "import.meta.resolve('example'); import.meta['resolve']('second'); import.meta.resolve(variable); other.meta.resolve('ignored');";
+    assert_eq!(script(source, "index.mjs"), ["example", "second"]);
+    let references = crate::scan::references(source, Path::new("index.mjs")).unwrap();
+    let offset = u32::try_from(source.find("'example'").unwrap()).unwrap();
+    assert!(references.contains(&(Requirement::Module("example".into()), Origin::Runtime, offset)));
+    let flow = "// @flow\nimport.meta.resolve('example'); import.meta['resolve']('second'); other.meta.resolve('ignored');";
+    assert_eq!(script(flow, "index.js"), ["example", "second"]);
+}
+
+#[test]
+fn import_meta_resolve_literal_works_in_node() {
+    let root = tempfile::tempdir().unwrap();
+    let package = root.path().join("node_modules/example");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("package.json"), r#"{"name":"example","main":"index.js"}"#)
+        .unwrap();
+    std::fs::write(package.join("index.js"), "module.exports = 1;").unwrap();
+    let entry = root.path().join("index.mjs");
+    std::fs::write(&entry, "console.log(import.meta.resolve('example'));").unwrap();
+    let output = std::process::Command::new("node").arg(entry).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("example/index.js"));
 }
 
 #[test]
@@ -242,6 +295,12 @@ fn aliases_of_create_require_and_its_result_are_node_imports() {
     ] {
         assert_eq!(script(source, "index.js"), ["loaded", "node:module"]);
     }
+}
+
+#[test]
+fn constant_aliases_of_created_require_are_followed() {
+    let source = "import { createRequire } from 'node:module'; const load = createRequire(import.meta.url); const again = load; const resolve = again.resolve; again('loaded'); resolve('resolved');";
+    assert_eq!(script(source, "index.mjs"), ["loaded", "node:module", "resolved"]);
 }
 
 #[test]

@@ -6,7 +6,8 @@ import { mkdtemp, open, readFile, realpath, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { registryPin, splitId } from './discover.mjs'
+import { readScan, registryPin, splitId } from './discover.mjs'
+export { readScan } from './discover.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const rangePattern = /^[~^]?[0-9]+(?:\.[0-9]+){0,2}(?:-[0-9A-Za-z.-]+)?$/
@@ -106,15 +107,6 @@ export function outsideProject(project, target) {
 
 function diagnosisCodes(output) {
   return [...new Set([...output.matchAll(/\bTS\d{4,5}\b/g)].map((match) => match[0]))].sort()
-}
-
-export function readScan(result) {
-  if (result.error || ![0, 2].includes(result.status)) return null
-  try {
-    const scan = JSON.parse(result.stdout)
-    if (scan.schemaVersion !== 1 || !Array.isArray(scan.packages) || !Array.isArray(scan.diagnostics) || typeof scan.complete !== 'boolean' || result.status !== (scan.complete ? 0 : 2)) return null
-    return scan
-  } catch { return null }
 }
 
 async function verifyOne(candidate, binary) {

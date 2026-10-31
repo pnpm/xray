@@ -11,6 +11,15 @@ const here = dirname(fileURLToPath(import.meta.url))
 const packageName = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/
 const versionPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
 
+export function readScan(result) {
+  if (result.error || ![0, 2].includes(result.status)) return null
+  try {
+    const scan = JSON.parse(result.stdout)
+    if (scan.schemaVersion !== 1 || !Array.isArray(scan.packages) || !Array.isArray(scan.diagnostics) || typeof scan.complete !== 'boolean' || result.status !== (scan.complete ? 0 : 2)) return null
+    return scan
+  } catch { return null }
+}
+
 export function splitId(id) {
   if (typeof id !== 'string') return null
   const index = id.lastIndexOf('@')
@@ -90,11 +99,9 @@ export async function discover(project, binary) {
   const root = resolve(project)
   if (!(await lstat(root)).isDirectory()) throw new Error('project must be a directory')
   const names = await localNames(root)
-  const scan = spawnSync(resolve(binary), [root, '--json'], { encoding: 'utf8', maxBuffer: 128 * 1024 * 1024 })
-  if (scan.error || ![0, 2].includes(scan.status)) throw new Error('xray scan failed; check the binary and project installation')
-  let result
-  try { result = JSON.parse(scan.stdout) } catch { throw new Error('xray returned invalid JSON') }
-  if (result.schemaVersion !== 1 || !Array.isArray(result.packages) || !Array.isArray(result.diagnostics) || typeof result.complete !== 'boolean') throw new Error('xray returned an unsupported JSON envelope')
+  const scan = spawnSync(resolve(binary), [root, '--json'], { encoding: 'utf8', timeout: 120_000, maxBuffer: 128 * 1024 * 1024 })
+  const result = readScan(scan)
+  if (!result) throw new Error('xray scan failed or returned inconsistent JSON; check the binary and project installation')
   const found = new Map()
   for (const report of result.packages) {
     const id = splitId(report.package)

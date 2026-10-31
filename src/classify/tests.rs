@@ -36,6 +36,38 @@ fn ignores_specifiers_that_need_nothing_installed() {
 }
 
 #[test]
+fn builtin_subpaths_are_only_exempt_when_node_recognizes_the_full_specifier() {
+    for specifier in ["fs/promises", "path/posix", "assert/strict", "_stream_readable"] {
+        assert_eq!(package_name(specifier), None, "{specifier}");
+    }
+    assert_eq!(package_name("fs/custom"), Some("fs"));
+    assert_eq!(package_name("path/custom"), Some("path"));
+
+    let root = tempfile::tempdir().unwrap();
+    let package = root.path().join("node_modules/fs");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("custom.js"), "module.exports = 42;").unwrap();
+    let output = std::process::Command::new("node")
+        .arg("-e")
+        .arg("if (require('fs/custom') !== 42) process.exit(1)")
+        .current_dir(root.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn node_builtin_names_are_not_builtin_sass_modules() {
+    let requirement = Requirement::Style("events".into(), crate::style::StyleKind::Use);
+    assert_eq!(
+        missing_package(&requirement, Origin::Runtime, &declared(&[])),
+        Some("events".into()),
+    );
+    let node = Requirement::Module("events".into());
+    assert_eq!(missing_package(&node, Origin::Runtime, &declared(&[])), None);
+}
+
+#[test]
 fn a_scope_on_its_own_is_not_a_package() {
     assert_eq!(package_name("@scope"), None);
 }

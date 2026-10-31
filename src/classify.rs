@@ -25,7 +25,11 @@ pub fn missing_package(
             } else {
                 specifier
             };
-            let name = package_name(specifier)?;
+            let name = if matches!(requirement, Requirement::Style(_, _)) {
+                package_name_inner(specifier, false)?
+            } else {
+                package_name(specifier)?
+            };
             let satisfied = declared.contains(name)
                 || (origin == Origin::Types && declared.contains(types_package(name).as_str()));
             (!satisfied).then(|| name.to_string())
@@ -55,6 +59,10 @@ pub fn types_package(name: &str) -> String {
 /// installed for it to resolve: relative paths, subpath imports, protocol URLs
 /// and Node builtins.
 pub fn package_name(specifier: &str) -> Option<&str> {
+    package_name_inner(specifier, true)
+}
+
+fn package_name_inner(specifier: &str, node_builtins: bool) -> Option<&str> {
     if specifier.starts_with(['.', '/', '#']) || specifier.is_empty() {
         return None;
     }
@@ -73,14 +81,28 @@ pub fn package_name(specifier: &str) -> Option<&str> {
         first
     };
 
-    if NODE_BUILTINS.contains(&name) {
+    if node_builtins && NODE_BUILTINS.contains(&specifier) {
         return None;
     }
     Some(name)
 }
 
 const NODE_BUILTINS: &[&str] = &[
+    "_http_agent",
+    "_http_client",
+    "_http_common",
+    "_http_incoming",
+    "_http_outgoing",
+    "_http_server",
+    "_stream_duplex",
+    "_stream_passthrough",
+    "_stream_readable",
+    "_stream_transform",
+    "_stream_wrap",
+    "_tls_common",
+    "_tls_wrap",
     "assert",
+    "assert/strict",
     "async_hooks",
     "buffer",
     "child_process",
@@ -91,32 +113,43 @@ const NODE_BUILTINS: &[&str] = &[
     "dgram",
     "diagnostics_channel",
     "dns",
+    "dns/promises",
     "domain",
     "events",
     "fs",
+    "fs/promises",
     "http",
     "http2",
     "https",
     "inspector",
+    "inspector/promises",
     "module",
     "net",
     "os",
     "path",
+    "path/posix",
+    "path/win32",
     "perf_hooks",
     "process",
     "punycode",
     "querystring",
     "readline",
+    "readline/promises",
     "repl",
     "stream",
+    "stream/consumers",
+    "stream/promises",
+    "stream/web",
     "string_decoder",
     "sys",
     "timers",
+    "timers/promises",
     "tls",
     "trace_events",
     "tty",
     "url",
     "util",
+    "util/types",
     "v8",
     "vm",
     "wasi",

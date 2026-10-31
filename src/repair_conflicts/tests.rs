@@ -27,3 +27,13 @@ fn supports_scoped_selectors_and_prereleases() {
         "packageExtensions:\n  '@scope/pkg@1.0.0-beta.2':\n    dependencies:\n      dep: '2'\n";
     assert!(check(existing, proposed).is_err());
 }
+
+#[test]
+fn wildcard_does_not_overlap_prerelease_but_unversioned_selector_does() {
+    let proposed =
+        "packageExtensions:\n  'example@1.0.0-beta.1':\n    dependencies:\n      dep: '2'\n";
+    let wildcard = "packageExtensions:\n  'example@*':\n    dependencies:\n      dep: '1'\n";
+    let unversioned = "packageExtensions:\n  example:\n    dependencies:\n      dep: '1'\n";
+    assert!(check(wildcard, proposed).is_ok());
+    assert!(check(unversioned, proposed).is_err());
+}

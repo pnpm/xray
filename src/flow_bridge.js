@@ -10,8 +10,9 @@ const found = [];
 // declarations shadow consistently. Block bindings remain local; var binds in
 // the nearest function or program scope.
 const scopes = new WeakMap();
+const aliases = [];
 const skippedKeys = new Set(['loc', 'range', 'comments', 'leadingComments', 'trailingComments', 'errors']);
-function scope(parent, functionScope = false) { return { parent, functionScope, bound: new Set() }; }
+function scope(parent, functionScope = false) { return { parent, functionScope, bound: new Map() }; }
 function functionParent(current) {
   while (current.parent && !current.functionScope) current = current.parent;
   return current;
@@ -34,7 +35,10 @@ function collect(node, current) {
   scopes.set(node, current);
   if (node.type === 'VariableDeclaration') {
     const bindingScope = node.kind === 'var' ? functionParent(current) : current;
-    for (const decl of node.declarations) bind(bindingScope, decl.id);
+    for (const decl of node.declarations) {
+      bind(bindingScope, decl.id);
+      if (node.kind === 'const' && decl.id.type === 'Identifier' && decl.init) aliases.push({ scope: bindingScope, name: decl.id.name, initializer: decl.init });
+    }
     for (const decl of node.declarations) {
       if (decl.init && decl.init.type === 'CallExpression' &&
           (decl.init.callee.name === 'createRequire' || decl.init.callee.property?.name === 'createRequire')) {
@@ -50,30 +54,51 @@ function shadowed(current, name) {
   while (current) { if (current.bound.has(name)) return true; current = current.parent; }
   return false;
 }
-function bindingContains(pattern, name) {
-  if (!pattern || typeof pattern !== 'object') return false;
-  if (pattern.type === 'Identifier') return pattern.name === name;
-  if (pattern.type === 'AssignmentPattern') return bindingContains(pattern.left, name);
-  if (pattern.type === 'RestElement') return bindingContains(pattern.argument, name);
-  if (pattern.type === 'ObjectPattern') return pattern.properties.some(property => bindingContains(property.value || property.argument, name));
-  if (pattern.type === 'ArrayPattern') return pattern.elements.some(element => bindingContains(element, name));
-  return false;
-}
 function bind(current, pattern) {
-  for (const name of ['require', 'module']) if (bindingContains(pattern, name)) current.bound.add(name);
+  if (!pattern || typeof pattern !== 'object') return;
+  switch (pattern.type) {
+    case 'Identifier': current.bound.set(pattern.name, 'other'); break;
+    case 'AssignmentPattern': bind(current, pattern.left); break;
+    case 'RestElement': bind(current, pattern.argument); break;
+    case 'ObjectPattern': for (const property of pattern.properties) bind(current, property.value || property.argument); break;
+    case 'ArrayPattern': for (const element of pattern.elements) bind(current, element); break;
+  }
+}
+function binding(current, name) {
+  while (current) {
+    if (current.bound.has(name)) return current.bound.get(name);
+    current = current.parent;
+  }
+  return undefined;
 }
 function record(literal, origin, esm = false) {
   if (literal && literal.type === 'Literal' && typeof literal.value === 'string') {
     found.push([literal.value, origin, literal.range[0], esm]);
   }
 }
-function isRequire(callee, current) {
+function isLoader(callee, current) {
   if (!callee) return false;
-  if (callee.type === 'Identifier') return callee.name === 'require' && !shadowed(current, 'require');
+  if (callee.type === 'Identifier') {
+    const kind = binding(current, callee.name);
+    return kind === 'loader' || (kind === undefined && callee.name === 'require');
+  }
   if (callee.type !== 'MemberExpression') return false;
   const name = callee.computed ? callee.property.value : callee.property.name;
-  if (name === 'resolve') return isRequire(callee.object, current);
   return name === 'require' && callee.object.type === 'Identifier' && callee.object.name === 'module' && !shadowed(current, 'module');
+}
+function isRequire(callee, current) {
+  if (isLoader(callee, current)) return true;
+  if (!callee) return false;
+  if (callee.type === 'Identifier') return binding(current, callee.name) === 'resolver';
+  if (callee.type !== 'MemberExpression') return false;
+  const name = callee.computed ? callee.property.value : callee.property.name;
+  return name === 'resolve' && isLoader(callee.object, current);
+}
+function isImportMetaResolve(callee) {
+  if (!callee || callee.type !== 'MemberExpression') return false;
+  const name = callee.computed ? callee.property.value : callee.property.name;
+  return name === 'resolve' && callee.object.type === 'MetaProperty' &&
+    callee.object.meta.name === 'import' && callee.object.property.name === 'meta';
 }
 function visit(node) {
   if (!node || typeof node !== 'object') return;
@@ -82,13 +107,22 @@ function visit(node) {
     case 'ImportDeclaration': record(node.source, node.importKind === 'type' || node.importKind === 'typeof' ? 'types' : 'runtime', true); break;
     case 'ExportNamedDeclaration': case 'ExportAllDeclaration': record(node.source, node.exportKind === 'type' ? 'types' : 'runtime', true); break;
     case 'ImportExpression': record(node.source, 'runtime', true); break;
-    case 'CallExpression': if (isRequire(node.callee, scopes.get(node))) record(node.arguments[0], 'runtime'); break;
+    case 'CallExpression': if (isRequire(node.callee, scopes.get(node)) || isImportMetaResolve(node.callee)) record(node.arguments[0], 'runtime'); break;
   }
   for (const [key, value] of Object.entries(node)) {
     if (!skippedKeys.has(key)) visit(value);
   }
 }
 collect(ast, scope(null, true));
+let changed;
+do {
+  changed = false;
+  for (const alias of aliases) {
+    if (alias.scope.bound.get(alias.name) !== 'other') continue;
+    const kind = isLoader(alias.initializer, alias.scope) ? 'loader' : isRequire(alias.initializer, alias.scope) ? 'resolver' : undefined;
+    if (kind) { alias.scope.bound.set(alias.name, kind); changed = true; }
+  }
+} while (changed);
 visit(ast);
 // Convert Flow's UTF-16 ranges in one pass, including on minified files with
 // many references. Node strings index surrogate pairs as two code units.
