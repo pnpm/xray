@@ -49,13 +49,14 @@ test('trace distinguishes custom search paths from ordinary lookup failures', { 
     const events = join(root, 'events.jsonl')
     const script = join(root, 'fixture.cjs')
     await writeFile(events, '')
-    await writeFile(script, "try { require.resolve('xray-custom-missing', {paths: []}) } catch {}\ntry { require('xray-ordinary-missing') } catch {}\nprocess.exitCode = 7;\n")
+    await writeFile(script, "try { require.resolve('xray-custom-missing', {paths: []}) } catch {}\nconst options = new Proxy({paths: []}, {getOwnPropertyDescriptor() { throw Error('metadata must not change the lookup') }});\ntry { require.resolve('xray-proxy-missing', options) } catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error }\ntry { require('xray-ordinary-missing') } catch {}\nprocess.exitCode = 7;\n")
     const hook = new URL('../src/trace-hook.mjs', import.meta.url).href
     const result = spawnSync(process.execPath, ['--import', hook, script], { encoding: 'utf8', env: { ...process.env, XRAY_TRACE_FILE: events } })
     assert.ifError(result.error)
     assert.equal(result.status, 7, result.stderr)
     const failures = (await readFile(events, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
     assert.equal(failures.filter(item => item.specifier === 'xray-custom-missing' && item.customResolution).length, 1)
+    assert.equal(failures.filter(item => item.specifier === 'xray-proxy-missing' && item.customResolution).length, 1)
     assert.equal(failures.filter(item => item.specifier === 'xray-ordinary-missing' && !item.customResolution).length, 1)
   } finally { await rm(root, { recursive: true, force: true }) }
 })

@@ -33,12 +33,17 @@ if (typeof nodeModule.registerHooks !== 'function') {
 const Module = nodeModule.default;
 const resolveFilename = Module._resolveFilename;
 Module._resolveFilename = function (...args) {
-  const descriptor = args[3] && Object.getOwnPropertyDescriptor(args[3], 'paths');
-  const custom = descriptor && (!('value' in descriptor) || descriptor.value !== undefined);
+  let custom = false;
+  try {
+    const descriptor = args[3] && Object.getOwnPropertyDescriptor(args[3], 'paths');
+    custom = Boolean(descriptor && (!('value' in descriptor) || descriptor.value !== undefined));
+  } catch { custom = true; }
   if (custom) customResolutions++;
   try { return Reflect.apply(resolveFilename, this, args); }
   catch (error) {
-    if (custom) record(args[0], args[1] && Object.getOwnPropertyDescriptor(args[1], 'filename')?.value, error, true);
+    try {
+      if (custom) record(args[0], args[1] && Object.getOwnPropertyDescriptor(args[1], 'filename')?.value, error, true);
+    } catch { /* Metadata collection must not replace the resolution error. */ }
     throw error;
   }
   finally { if (custom) customResolutions--; }

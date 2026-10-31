@@ -132,6 +132,30 @@ try {
   assert(memberCheck.status === 0 && JSON.parse(memberCheck.stdout).complete, `member check should be clean after workspace fix: ${memberCheck.stdout} ${memberCheck.stderr}`)
   assert(await readFile(memberConfig, 'utf8') === memberAfter, 'member check changed root config')
   console.log('PASS member cwd discovers other workspace providers and writes only ancestor config without a shared lockfile')
+
+  const contextRoot = join(root, 'resolver-context')
+  const contextPackage = join(contextRoot, 'node_modules/context-caller')
+  const contextProvider = join(contextRoot, 'node_modules/context-provider')
+  await mkdir(contextPackage, { recursive: true })
+  await mkdir(contextProvider, { recursive: true })
+  const contextConfig = join(contextRoot, 'pnpm-workspace.yaml')
+  const contextSettings = '# preserve resolution ownership\npackages: []\nhoist: false\n'
+  await writeFile(contextConfig, contextSettings)
+  await writeFile(join(contextRoot, 'package.json'), JSON.stringify({ name: 'context-workspace', version: '1.0.0', private: true }))
+  await writeFile(join(contextPackage, 'package.json'), JSON.stringify({ name: 'context-caller', version: '1.0.0', main: 'index.cjs' }))
+  await writeFile(join(contextProvider, 'package.json'), JSON.stringify({ name: 'context-provider', version: '1.0.0', main: 'index.cjs' }))
+  await writeFile(join(contextProvider, 'index.cjs'), 'module.exports = 42;\n')
+  await writeFile(join(contextPackage, 'index.cjs'), "try { require.resolve('context-provider', {paths: []}) } catch {} process.exitCode = 9;\n")
+  const customContext = run([contextRoot, '--trace', '--fix', '--', process.execPath, '-e', "require('context-caller')"])
+  assert(customContext.status === 9 && customContext.stderr.includes('Explicit resolver options') && customContext.stderr.includes('context-provider'), `custom lookup was not diagnosed: ${customContext.stdout} ${customContext.stderr}`)
+  assert(await readFile(contextConfig, 'utf8') === contextSettings, 'trace incorrectly linked an installed provider into the custom resolver caller')
+  console.log('PASS custom resolver failure does not generate a caller peer even when its provider is installed')
+
+  await writeFile(join(contextRoot, 'workspace.cjs'), "try { require('workspace-absent') } catch {} process.exitCode = 8;\n")
+  const workspaceContext = run([contextRoot, '--trace', '--fix', '--', process.execPath, 'workspace.cjs'])
+  assert(workspaceContext.status === 8 && workspaceContext.stderr.includes('Workspace source') && workspaceContext.stderr.includes('workspace-absent'), `workspace failure was not diagnosed: ${workspaceContext.stdout} ${workspaceContext.stderr}`)
+  assert(await readFile(contextConfig, 'utf8') === contextSettings, 'workspace trace failure changed package extensions')
+  console.log('PASS workspace trace failure is visible and preserves command status without package extensions')
 } finally {
   await rm(root, { recursive: true, force: true })
 }
