@@ -70,6 +70,7 @@ jobs:
         node --test corpus/regenerate-source.test.mjs
       env:
         XRAY_TYPESCRIPT: ${{ runner.temp }}/xray-smoke-deps/node_modules/typescript
+        XRAY_DEBUG_REGEN: '1'
 
   gnu-abi:
     name: GNU/Linux glibc 2.28 ABI

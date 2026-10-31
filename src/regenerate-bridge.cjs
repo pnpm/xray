@@ -40,7 +40,10 @@ for (const diagnostic of syntax) {
   const declaration = real(diagnostic.file.fileName);
   if (!declaration) { skipped.missingDeclaration++; continue; }
   const root = roots.find(root => contained(declaration, root));
-  if (!root) { skipped.outsideRoots++; continue; }
+  if (!root) {
+    if (process.env.XRAY_DEBUG_REGEN === '1') console.error('REGEN_DEBUG', JSON.stringify({ declaration, roots, relative: roots.map(root => path.relative(root, declaration)) }));
+    skipped.outsideRoots++; continue;
+  }
   const runtime = declaration.replace(/\.d\.(mts|cts|ts)$/, (_, ext) => ext === 'mts' ? '.mjs' : ext === 'cts' ? '.cjs' : '.js');
   if (!fs.existsSync(runtime)) { skipped.missingRuntime++; continue; }
   if (!samePath(real(runtime), runtime)) { skipped.nonCanonicalRuntime++; continue; }
