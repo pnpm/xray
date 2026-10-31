@@ -99,7 +99,7 @@ fn recovery_contains_private_original_and_checkpointed_content() {
     let mut snapshot = Snapshot::capture(root.path(), &[]).unwrap();
     fs::write(&workspace, "changed secret").unwrap();
     snapshot.checkpoint(std::slice::from_ref(&workspace)).unwrap();
-    let recovery = snapshot.save_recovery().unwrap();
+    let recovery = snapshot.save_recovery(&root.path().join("journals")).unwrap();
     assert_eq!(fs::metadata(&recovery).unwrap().permissions().mode() & 0o777, 0o700);
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(recovery.join("recovery.json")).unwrap()).unwrap();
@@ -147,7 +147,7 @@ fn refreshing_recovery_preserves_original_and_updates_expected() {
     let workspace = root.path().canonicalize().unwrap().join("pnpm-workspace.yaml");
     fs::write(&workspace, "before").unwrap();
     let mut snapshot = Snapshot::capture(root.path(), &[]).unwrap();
-    let recovery = snapshot.save_recovery().unwrap();
+    let recovery = snapshot.save_recovery(&root.path().join("journals")).unwrap();
     fs::write(&workspace, "after").unwrap();
     snapshot.checkpoint(std::slice::from_ref(&workspace)).unwrap();
     snapshot.refresh_recovery(&recovery).unwrap();
@@ -176,7 +176,7 @@ fn recovery_roundtrip_and_safe_removal() {
     let workspace = root.path().canonicalize().unwrap().join("pnpm-workspace.yaml");
     fs::write(&workspace, "before").unwrap();
     let mut snapshot = Snapshot::capture(root.path(), &[]).unwrap();
-    let recovery = snapshot.save_recovery().unwrap();
+    let recovery = snapshot.save_recovery(&root.path().join("journals")).unwrap();
     fs::write(&workspace, "after").unwrap();
     snapshot.checkpoint(std::slice::from_ref(&workspace)).unwrap();
     snapshot.refresh_recovery(&recovery).unwrap();
@@ -195,7 +195,7 @@ fn recovery_rejects_path_escape_and_corrupt_blob() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("pnpm-workspace.yaml"), "before").unwrap();
     let snapshot = Snapshot::capture(root.path(), &[]).unwrap();
-    let recovery = snapshot.save_recovery().unwrap();
+    let recovery = snapshot.save_recovery(&root.path().join("journals")).unwrap();
     let manifest_path = recovery.join("recovery.json");
     let original = fs::read(&manifest_path).unwrap();
     let mut manifest: serde_json::Value = serde_json::from_slice(&original).unwrap();
@@ -228,7 +228,7 @@ fn recovery_directory_has_a_protected_dacl() {
     };
     let root = tempfile::tempdir().unwrap();
     let snapshot = Snapshot::capture(root.path(), &[]).unwrap();
-    let recovery = snapshot.save_recovery().unwrap();
+    let recovery = snapshot.save_recovery(&root.path().join("journals")).unwrap();
     let filename: Vec<u16> = recovery.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut required = 0;
     // SAFETY: the path is null terminated; the first call requests the required
@@ -278,7 +278,7 @@ fn recovery_preserves_and_checks_windows_readonly_permission() {
     original_permissions.set_readonly(true);
     fs::set_permissions(&path, original_permissions).unwrap();
     let mut snapshot = Snapshot::capture(root.path(), &[]).unwrap();
-    let recovery = snapshot.save_recovery().unwrap();
+    let recovery = snapshot.save_recovery(&root.path().join("journals")).unwrap();
     let mut permissions = fs::metadata(&path).unwrap().permissions();
     permissions.set_readonly(false);
     fs::set_permissions(&path, permissions).unwrap();
@@ -313,7 +313,7 @@ fn journal_roundtrips_layout_and_legacy_requires_manual_recovery() {
     let layout = crate::verify_layout::Layout::capture(root.path()).unwrap();
     let mut snapshot = Snapshot::capture(root.path(), &[]).unwrap();
     snapshot.set_layout(layout);
-    let recovery = snapshot.save_recovery().unwrap();
+    let recovery = snapshot.save_recovery(&root.path().join("journals")).unwrap();
     let loaded = Snapshot::load_recovery(&recovery).unwrap();
     loaded.recovery_layout().unwrap().validate_recovery(root.path()).unwrap();
     let manifest_path = recovery.join("recovery.json");
@@ -324,5 +324,103 @@ fn journal_roundtrips_layout_and_legacy_requires_manual_recovery() {
     fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let legacy = Snapshot::load_recovery(&recovery).unwrap();
     assert!(legacy.recovery_layout().is_err());
+    Snapshot::remove_recovery(&recovery).unwrap();
+}
+
+fn blob_files(recovery: &Path) -> Vec<String> {
+    let mut names: Vec<_> = fs::read_dir(recovery)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.starts_with("xray-blob-"))
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn repeated_refreshes_store_each_content_once_and_prune_superseded_blobs() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().canonicalize().unwrap();
+    let workspace = directory.join("pnpm-workspace.yaml");
+    let lock = directory.join("pnpm-lock.yaml");
+    fs::write(&workspace, "settings").unwrap();
+    fs::write(&lock, "original lock").unwrap();
+    let mut snapshot = Snapshot::capture(root.path(), &[]).unwrap();
+    let recovery = snapshot.save_recovery(&root.path().join("journals")).unwrap();
+    // Original and checkpointed content are identical: one blob each file.
+    assert_eq!(blob_files(&recovery).len(), 2);
+    for _ in 0..5 {
+        snapshot.refresh_recovery(&recovery).unwrap();
+    }
+    assert_eq!(blob_files(&recovery).len(), 2);
+    for round in 0..5 {
+        fs::write(&lock, format!("lock {round}")).unwrap();
+        snapshot.checkpoint(std::slice::from_ref(&lock)).unwrap();
+        snapshot.refresh_recovery(&recovery).unwrap();
+        // The settings, the original lock, and only the latest lock.
+        assert_eq!(blob_files(&recovery).len(), 3);
+    }
+    let mut loaded = Snapshot::load_recovery(&recovery).unwrap();
+    loaded.restore().unwrap();
+    assert_eq!(fs::read(&lock).unwrap(), b"original lock");
+    Snapshot::remove_recovery(&recovery).unwrap();
+    assert!(!recovery.exists());
+}
+
+#[test]
+fn recovery_accepts_original_content_and_any_lockfile_but_not_user_edits() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().canonicalize().unwrap();
+    let workspace = directory.join("pnpm-workspace.yaml");
+    let lock = directory.join("pnpm-lock.yaml");
+    fs::write(&workspace, "original settings").unwrap();
+    fs::write(&lock, "original lock").unwrap();
+    let mut snapshot = Snapshot::capture(root.path(), &[]).unwrap();
+    let recovery = snapshot.save_recovery(&root.path().join("journals")).unwrap();
+    fs::write(&workspace, "proposal settings").unwrap();
+    fs::write(&lock, "proposal lock").unwrap();
+    snapshot.checkpoint(&[workspace.clone(), lock.clone()]).unwrap();
+    snapshot.refresh_recovery(&recovery).unwrap();
+    // A restore wrote the original settings, then the process was killed
+    // while a pnpm install it started kept writing the lockfile.
+    fs::write(&workspace, "original settings").unwrap();
+    fs::write(&lock, "lock written by an orphaned install").unwrap();
+    let mut loaded = Snapshot::load_recovery(&recovery).unwrap();
+    assert!(loaded.restore().is_err(), "a rollback still requires the checkpoint");
+    loaded.restore_for_recovery().unwrap();
+    assert_eq!(fs::read(&workspace).unwrap(), b"original settings");
+    assert_eq!(fs::read(&lock).unwrap(), b"original lock");
+
+    fs::write(&workspace, "user edit").unwrap();
+    let mut loaded = Snapshot::load_recovery(&recovery).unwrap();
+    assert!(loaded.restore_for_recovery().is_err());
+    assert_eq!(fs::read(&workspace).unwrap(), b"user edit");
+    Snapshot::remove_recovery(&recovery).unwrap();
+}
+
+#[test]
+fn recovery_removes_an_empty_patch_directory_created_before_a_crash() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().canonicalize().unwrap();
+    let mut snapshot = Snapshot::capture(root.path(), &[]).unwrap();
+    let patch = snapshot.track_artifact(Path::new("patches/example.patch")).unwrap();
+    snapshot.ensure_patch_directory().unwrap();
+    let recovery = snapshot.save_recovery(&root.path().join("journals")).unwrap();
+    fs::write(&patch, "generated").unwrap();
+    snapshot.checkpoint(std::slice::from_ref(&patch)).unwrap();
+    snapshot.refresh_recovery(&recovery).unwrap();
+    drop(snapshot);
+    let mut loaded = Snapshot::load_recovery(&recovery).unwrap();
+    loaded.restore_for_recovery().unwrap();
+    assert!(!directory.join("patches").exists());
+
+    // A directory that already existed is never removed.
+    fs::create_dir(directory.join("patches")).unwrap();
+    let mut snapshot = Snapshot::capture(root.path(), &[]).unwrap();
+    snapshot.track_artifact(Path::new("patches/example.patch")).unwrap();
+    snapshot.ensure_patch_directory().unwrap();
+    snapshot.refresh_recovery(&recovery).unwrap();
+    Snapshot::load_recovery(&recovery).unwrap().restore_for_recovery().unwrap();
+    assert!(directory.join("patches").is_dir());
     Snapshot::remove_recovery(&recovery).unwrap();
 }

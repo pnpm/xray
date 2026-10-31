@@ -1,9 +1,105 @@
-//! An exclusive operating-system lease for one recovery journal.
+//! Exclusive operating-system leases for recovery journals and workspaces,
+//! and the persistent directory that holds them.
 use anyhow::{bail, Context, Result};
+use sha2::{Digest as _, Sha256};
 use std::{
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
 };
+
+/// A per-user directory that survives reboots. The system temp directory is
+/// often a tmpfs, which would lose a recovery journal exactly when a crash
+/// makes it necessary. `XDG_STATE_HOME` is honoured on every platform.
+pub fn state_directory() -> Result<PathBuf> {
+    let absolute =
+        |name: &str| std::env::var_os(name).map(PathBuf::from).filter(|path| path.is_absolute());
+    if let Some(state) = absolute("XDG_STATE_HOME") {
+        return Ok(state.join("xray"));
+    }
+    #[cfg(windows)]
+    let base = absolute("LOCALAPPDATA");
+    #[cfg(target_os = "macos")]
+    let base = absolute("HOME").map(|home| home.join("Library/Application Support"));
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let base = absolute("HOME").map(|home| home.join(".local/state"));
+    base.map(|base| base.join("xray")).context(
+        "cannot locate a persistent state directory for the recovery journal; set XDG_STATE_HOME",
+    )
+}
+
+/// Create a private directory and its missing parents, then make the new
+/// entries durable so a journal created inside it survives a crash.
+pub fn create_private_directory(path: &Path) -> Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        builder.mode(0o700);
+    }
+    builder.create(path).with_context(|| format!("creating {}", path.display()))?;
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        bail!("{} must be a real directory", path.display());
+    }
+    sync_directory(path)?;
+    // Ancestors may be unreadable (search-only); their entries are best effort.
+    for ancestor in path.ancestors().skip(1) {
+        if sync_directory(ancestor).is_err() {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Make renames and creations inside `directory` durable. Windows offers no
+/// directory handle sync through the standard library and needs none for
+/// NTFS metadata journaling.
+pub fn sync_directory(directory: &Path) -> Result<()> {
+    #[cfg(unix)]
+    File::open(directory)
+        .and_then(|file| file.sync_all())
+        .with_context(|| format!("syncing directory {}", directory.display()))?;
+    #[cfg(not(unix))]
+    let _ = directory;
+    Ok(())
+}
+
+/// Serializes verification and recovery on one workspace. The lock file is
+/// keyed by the canonical workspace root and is never removed, so two runs
+/// always contend for the same file.
+pub struct WorkspaceLock {
+    _file: File,
+}
+
+impl WorkspaceLock {
+    pub fn acquire(workspace: &Path) -> Result<Self> {
+        Self::acquire_in(&state_directory()?.join("locks"), workspace)
+    }
+
+    pub fn acquire_in(directory: &Path, workspace: &Path) -> Result<Self> {
+        let root = workspace.canonicalize().context("resolving workspace to lock")?;
+        create_private_directory(directory)?;
+        let key = Sha256::digest(root.as_os_str().as_encoded_bytes());
+        let path = directory.join(format!("{key:x}.lock"));
+        reject_symlink(&path)?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let file = options.open(&path).context("opening workspace lock")?;
+        file.try_lock().map_err(|_| {
+            anyhow::anyhow!(
+                "another xray verification or recovery is running for {}",
+                root.display()
+            )
+        })?;
+        Ok(Self { _file: file })
+    }
+}
 
 pub struct Lease {
     file: File,

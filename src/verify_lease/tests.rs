@@ -1,4 +1,27 @@
-use super::Lease;
+use super::{Lease, WorkspaceLock};
+
+#[test]
+fn one_verification_or_recovery_per_workspace() {
+    let state = tempfile::tempdir().unwrap();
+    let locks = state.path().join("nested/locks");
+    let workspace = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let first = WorkspaceLock::acquire_in(&locks, workspace.path()).unwrap();
+    // The same workspace through a different spelling is still the same lock.
+    let alias = workspace.path().join(".");
+    let error = WorkspaceLock::acquire_in(&locks, &alias).err().unwrap();
+    assert!(error.to_string().contains("running"), "{error:#}");
+    let unrelated = WorkspaceLock::acquire_in(&locks, other.path()).unwrap();
+    drop(first);
+    let again = WorkspaceLock::acquire_in(&locks, workspace.path()).unwrap();
+    drop((again, unrelated));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&locks).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+}
 
 #[test]
 fn exclusive_until_drop_and_reusable_afterwards() {

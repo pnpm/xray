@@ -89,7 +89,11 @@ struct Manifest {
     owned_blobs: BTreeSet<String>,
     #[serde(default)]
     layout: Option<crate::verify_layout::Layout>,
+    #[serde(default)]
+    owned_patch_directory: bool,
 }
+
+const SCHEMA_VERSION: u8 = 3;
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Entry {
@@ -115,14 +119,7 @@ fn read_recovery_blob(
     if !owned_blobs.contains(&blob.file) {
         bail!("unowned recovery blob");
     }
-    let name = Path::new(&blob.file);
-    if !matches!(name.components().next(), Some(Component::Normal(_)))
-        || name.components().count() != 1
-        || !blob.file.starts_with("xray-blob-")
-    {
-        bail!("invalid recovery blob path");
-    }
-    let path = directory.join(name);
+    let path = directory.join(blob_name(&blob.file)?);
     let metadata = fs::symlink_metadata(&path)?;
     if !metadata.file_type().is_file() {
         bail!("recovery blob must be a regular file");
@@ -133,6 +130,48 @@ fn read_recovery_blob(
     }
     let permissions = FilePermissions::from_mode(blob.mode)?;
     Ok(FileState::Present { bytes, permissions })
+}
+
+/// Validate a journal blob name: a single plain component Xray created.
+fn blob_name(name: &str) -> Result<&Path> {
+    let path = Path::new(name);
+    if !matches!(path.components().next(), Some(Component::Normal(_)))
+        || path.components().count() != 1
+        || !name.starts_with("xray-blob-")
+    {
+        bail!("invalid recovery blob path");
+    }
+    Ok(path)
+}
+
+/// Store content once under its hash. Journals are refreshed after every
+/// checkpoint, and rewriting unchanged originals each time would grow the
+/// journal by the size of every tracked lockfile per refresh.
+fn write_blob(
+    directory: &Path,
+    state: &FileState,
+    owned: &mut BTreeSet<String>,
+) -> Result<serde_json::Value> {
+    let FileState::Present { bytes, permissions } = state else {
+        return Ok(serde_json::Value::Null);
+    };
+    let sha256 = format!("{:x}", Sha256::digest(bytes));
+    let name = format!("xray-blob-{sha256}");
+    let path = directory.join(&name);
+    let existing = match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_file() => true,
+        Ok(_) => bail!("recovery blob must be a regular file"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    if !existing {
+        let mut file = tempfile::Builder::new().prefix("xray-partial-").tempfile_in(directory)?;
+        file.write_all(bytes)?;
+        file.as_file().sync_all()?;
+        file.persist(&path)?;
+    }
+    owned.insert(name.clone());
+    Ok(serde_json::json!({ "file": name, "mode": permissions.mode(), "sha256": sha256 }))
 }
 
 struct TrackedFile {
@@ -146,8 +185,28 @@ pub struct Snapshot {
     root: PathBuf,
     files: BTreeMap<PathBuf, TrackedFile>,
     lockfiles: BTreeSet<PathBuf>,
-    owned_patch_dir: Option<same_file::Handle>,
+    patch_dir: PatchDirectory,
     layout: Option<crate::verify_layout::Layout>,
+}
+
+/// Whether Xray created `patches/` and may remove it again once empty.
+enum PatchDirectory {
+    Preexisting,
+    /// Created by this process; the handle proves it was not replaced.
+    Created(same_file::Handle),
+    /// Created by a process that crashed, as recorded in its journal.
+    Journaled,
+}
+
+/// Which current file states a restore accepts as its starting point.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Restore {
+    /// Only the last checkpoint: anything else is an intervening edit.
+    Checkpoint,
+    /// Also the original content, which an interrupted restore may already
+    /// have written, and any lockfile content, which a pnpm process that
+    /// outlived Xray may have written and recovery replaces anyway.
+    Recovery,
 }
 
 impl Snapshot {
@@ -158,7 +217,7 @@ impl Snapshot {
             root: root.clone(),
             files: BTreeMap::new(),
             lockfiles: BTreeSet::new(),
-            owned_patch_dir: None,
+            patch_dir: PatchDirectory::Preexisting,
             layout: None,
         };
         snapshot.track(root.join("pnpm-workspace.yaml"))?;
@@ -198,7 +257,10 @@ impl Snapshot {
     pub fn ensure_patch_directory(&mut self) -> Result<()> {
         let path = self.root.join("patches");
         match fs::create_dir(&path) {
-            Ok(()) => self.owned_patch_dir = Some(same_file::Handle::from_path(&path)?),
+            Ok(()) => {
+                self.patch_dir = PatchDirectory::Created(same_file::Handle::from_path(&path)?);
+                crate::verify_lease::sync_directory(&self.root)?;
+            }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 let metadata = fs::symlink_metadata(&path)?;
                 if !metadata.is_dir() || metadata.file_type().is_symlink() {
@@ -264,8 +326,11 @@ impl Snapshot {
 
     /// Persist original bytes before any mutation. Keep this directory until
     /// the transaction succeeds or a complete rollback has been verified.
-    pub fn save_recovery(&self) -> Result<PathBuf> {
-        let directory = tempfile::Builder::new().prefix("xray-recovery-").tempdir()?;
+    /// `base` must survive a reboot (see `verify_lease::state_directory`);
+    /// `--recover` takes the returned journal path.
+    pub fn save_recovery(&self, base: &Path) -> Result<PathBuf> {
+        crate::verify_lease::create_private_directory(base)?;
+        let directory = tempfile::Builder::new().prefix("xray-recovery-").tempdir_in(base)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -274,14 +339,16 @@ impl Snapshot {
         #[cfg(windows)]
         protect_recovery_directory(directory.path())?;
         self.refresh_recovery(directory.path())?;
+        crate::verify_lease::sync_directory(base)?;
         Ok(directory.keep())
     }
 
-    /// Publish a complete new manifest atomically; old blobs remain available
-    /// if the process stops during an update.
+    /// Publish a complete new manifest atomically. Blobs are content
+    /// addressed, so unchanged content is never rewritten; blobs only the
+    /// previous manifest referenced are deleted once the new one is durable.
     pub fn refresh_recovery(&self, directory: &Path) -> Result<()> {
         let manifest_path = directory.join("recovery.json");
-        let mut owned: BTreeSet<String> = if manifest_path.exists() {
+        let previous: BTreeSet<String> = if manifest_path.exists() {
             let previous: serde_json::Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
             serde_json::from_value(
                 previous.get("ownedBlobs").cloned().context("missing owned blobs")?,
@@ -289,47 +356,38 @@ impl Snapshot {
         } else {
             BTreeSet::new()
         };
+        let mut owned = BTreeSet::new();
         let mut entries = Vec::new();
         for (path, tracked) in &self.files {
-            let state = |value: &FileState| -> Result<serde_json::Value> {
-                match value {
-                    FileState::Absent => Ok(serde_json::Value::Null),
-                    FileState::Present { bytes, permissions } => {
-                        let mut file =
-                            tempfile::Builder::new().prefix("xray-blob-").tempfile_in(directory)?;
-                        file.write_all(bytes)?;
-                        file.as_file().sync_all()?;
-                        let (_, path) = file.keep()?;
-                        let name = path
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .context("recovery blob has no name")?;
-                        let mode = permissions.mode();
-                        Ok(
-                            serde_json::json!({ "file": name, "mode": mode, "sha256": format!("{:x}", Sha256::digest(bytes)) }),
-                        )
-                    }
-                }
-            };
-            let before = state(&tracked.before)?;
-            let expected = state(&tracked.expected)?;
-            for value in [&before, &expected] {
-                if let Some(name) = value.get("file").and_then(serde_json::Value::as_str) {
-                    owned.insert(name.to_owned());
-                }
-            }
             entries.push(serde_json::json!({
                 "path": path.strip_prefix(&self.root)?,
-                "before": before,
-                "expected": expected,
+                "before": write_blob(directory, &tracked.before, &mut owned)?,
+                "expected": write_blob(directory, &tracked.expected, &mut owned)?,
                 "lockfile": self.lockfiles.contains(path),
             }));
         }
-        let manifest = serde_json::json!({ "schemaVersion": 2, "root": self.root, "files": entries, "ownedBlobs": owned, "layout": self.layout });
+        let manifest = serde_json::json!({
+            "schemaVersion": SCHEMA_VERSION,
+            "root": self.root,
+            "files": entries,
+            "ownedBlobs": owned,
+            "layout": self.layout,
+            "ownedPatchDirectory": !matches!(self.patch_dir, PatchDirectory::Preexisting),
+        });
+        // New blobs must be durable before a manifest refers to them.
+        crate::verify_lease::sync_directory(directory)?;
         let mut file = tempfile::NamedTempFile::new_in(directory)?;
         serde_json::to_writer_pretty(&mut file, &manifest)?;
         file.as_file().sync_all()?;
-        file.persist(directory.join("recovery.json"))?;
+        file.persist(&manifest_path)?;
+        crate::verify_lease::sync_directory(directory)?;
+        for name in previous.difference(&owned) {
+            match fs::remove_file(directory.join(blob_name(name)?)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("removing superseded recovery blob"),
+            }
+        }
         Ok(())
     }
 
@@ -345,7 +403,7 @@ impl Snapshot {
             bail!("recovery manifest must be a regular file");
         }
         let manifest: Manifest = serde_json::from_slice(&fs::read(manifest_path)?)?;
-        if ![1, 2].contains(&manifest.schema_version) {
+        if !(1..=SCHEMA_VERSION).contains(&manifest.schema_version) {
             bail!("unsupported recovery schema");
         }
         let root = manifest.root.canonicalize().context("resolving recovery workspace")?;
@@ -353,10 +411,14 @@ impl Snapshot {
             root: root.clone(),
             files: BTreeMap::new(),
             lockfiles: BTreeSet::new(),
-            owned_patch_dir: None,
+            patch_dir: if manifest.owned_patch_directory {
+                PatchDirectory::Journaled
+            } else {
+                PatchDirectory::Preexisting
+            },
             layout: None,
         };
-        if manifest.schema_version == 2 {
+        if manifest.schema_version >= 2 {
             snapshot.layout = manifest.layout;
         }
         for entry in manifest.files {
@@ -407,14 +469,7 @@ impl Snapshot {
         let manifest: serde_json::Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
         let owned: BTreeSet<String> = serde_json::from_value(manifest["ownedBlobs"].clone())?;
         for name in &owned {
-            let path = Path::new(name);
-            if !name.starts_with("xray-blob-")
-                || path.components().count() != 1
-                || !matches!(path.components().next(), Some(Component::Normal(_)))
-            {
-                bail!("invalid recovery blob path");
-            }
-            let metadata = fs::symlink_metadata(directory.join(path))?;
+            let metadata = fs::symlink_metadata(directory.join(blob_name(name)?))?;
             if !metadata.file_type().is_file() {
                 bail!("recovery blob must be a regular file");
             }
@@ -434,10 +489,22 @@ impl Snapshot {
     /// Restores each file atomically; an I/O failure can still interrupt a
     /// multi-file restore and is returned to the caller for recovery.
     pub fn restore(&mut self) -> Result<()> {
-        self.check_expected()?;
+        self.restore_from(Restore::Checkpoint)
+    }
+
+    /// Restore after a crash. Files already back at their original content are
+    /// accepted, because a restore writes files before the journal records it,
+    /// and lockfiles are replaced whatever pnpm left in them. Any other
+    /// difference from the checkpoint is still an intervening edit.
+    pub fn restore_for_recovery(&mut self) -> Result<()> {
+        self.restore_from(Restore::Recovery)
+    }
+
+    fn restore_from(&mut self, mode: Restore) -> Result<()> {
+        let current = self.check_restorable(mode)?;
         let mut staged = BTreeMap::new();
         for (path, tracked) in &self.files {
-            if tracked.before == tracked.expected {
+            if current[path] == tracked.before {
                 continue;
             }
             if let FileState::Present { bytes, permissions } = &tracked.before {
@@ -449,14 +516,17 @@ impl Snapshot {
                 staged.insert(path.clone(), temp);
             }
         }
-        self.check_expected()?;
+        if self.check_restorable(mode)? != current {
+            bail!("transaction files changed during rollback");
+        }
         for (path, tracked) in &self.files {
-            if tracked.before == tracked.expected {
+            if current[path] == tracked.before {
                 continue;
             }
-            if self.read_state(path)? != tracked.expected {
+            if self.read_state(path)? != current[path] {
                 bail!("transaction file changed during rollback: {}", path.display());
             }
+            let parent = path.parent().context("transaction path has no parent")?;
             match &tracked.before {
                 FileState::Absent => match fs::remove_file(path) {
                     Ok(()) => {}
@@ -480,16 +550,24 @@ impl Snapshot {
                     restored.sync_all()?;
                 }
             }
+            crate::verify_lease::sync_directory(parent)?;
         }
-        if let Some(original) = self.owned_patch_dir.take() {
+        let owned = std::mem::replace(&mut self.patch_dir, PatchDirectory::Preexisting);
+        if !matches!(owned, PatchDirectory::Preexisting) {
             let path = self.root.join("patches");
             match fs::symlink_metadata(&path) {
                 Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-                    let same_directory = same_file::Handle::from_path(&path)? == original;
-                    drop(original);
+                    // A journal cannot prove identity across processes; an
+                    // empty directory is all a removal can affect.
+                    let same_directory = match owned {
+                        PatchDirectory::Created(original) => {
+                            same_file::Handle::from_path(&path)? == original
+                        }
+                        _ => true,
+                    };
                     if same_directory {
                         match fs::remove_dir(path) {
-                            Ok(()) => {}
+                            Ok(()) => crate::verify_lease::sync_directory(&self.root)?,
                             Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
                             }
                             Err(error) => return Err(error.into()),
@@ -502,6 +580,22 @@ impl Snapshot {
             }
         }
         Ok(())
+    }
+
+    /// Read every tracked file and require a state `mode` accepts.
+    fn check_restorable(&self, mode: Restore) -> Result<BTreeMap<PathBuf, FileState>> {
+        let mut current = BTreeMap::new();
+        for (path, tracked) in &self.files {
+            let state = self.read_state(path)?;
+            let accepted = state == tracked.expected
+                || (mode == Restore::Recovery
+                    && (state == tracked.before || self.lockfiles.contains(path)));
+            if !accepted {
+                bail!("transaction file changed since checkpoint: {}", path.display());
+            }
+            current.insert(path.clone(), state);
+        }
+        Ok(current)
     }
 
     fn track(&mut self, path: PathBuf) -> Result<()> {

@@ -4,7 +4,7 @@ use crate::{
     declaration_patch, discovery, report, trace,
     verify_candidates::{self, Candidate},
     verify_layout::Layout,
-    verify_lease::Lease,
+    verify_lease::{self, Lease, WorkspaceLock},
     verify_signals::{self, SignalGuard},
     verify_transaction::Snapshot,
     workspace,
@@ -43,6 +43,7 @@ struct Session<'a> {
 }
 
 pub fn run(options: Options<'_>) -> Result<ExitCode> {
+    let _workspace_lock = WorkspaceLock::acquire(options.workspace)?;
     let signals = SignalGuard::install()?;
     let layout = Layout::capture(options.workspace)?;
     layout.preflight()?;
@@ -332,7 +333,8 @@ impl Session<'_> {
         if let Some(path) = &self.recovery {
             self.snapshot.refresh_recovery(path)?;
         } else {
-            let path = self.snapshot.save_recovery()?;
+            let path =
+                self.snapshot.save_recovery(&verify_lease::state_directory()?.join("recovery"))?;
             let lease = Lease::acquire(&path)?;
             eprintln!("Recovery journal: {}", path.display());
             self.recovery = Some(path);
@@ -445,6 +447,7 @@ fn attempt_identity(candidate: &Candidate, applied: &[Candidate]) -> String {
 }
 
 pub fn recover(project: &Path, journal: &Path) -> Result<ExitCode> {
+    let _workspace_lock = WorkspaceLock::acquire(project)?;
     let lease = Lease::acquire(journal)?;
     let mut snapshot = Snapshot::load_recovery(journal)?;
     if project.canonicalize()? != snapshot.workspace_root() {
@@ -458,7 +461,7 @@ pub fn recover(project: &Path, journal: &Path) -> Result<ExitCode> {
     layout.preflight()?;
     let signals = SignalGuard::install()?;
     let paths = snapshot.tracked_paths();
-    snapshot.restore()?;
+    snapshot.restore_for_recovery()?;
     snapshot.checkpoint(&paths)?;
     snapshot.refresh_recovery(journal)?;
     layout.preflight()?;
