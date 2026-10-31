@@ -120,12 +120,12 @@ test('rejects virtual source when a real adjacent implementation exists', { skip
   } finally { await rm(context.root, { recursive: true, force: true }) }
 })
 
-test('refuses project references instead of silently ignoring them', { skip: unavailable }, async () => {
+test('refuses a missing project reference', { skip: unavailable }, async () => {
   const context = await fixture(declaration, consumer, { references: true })
   try {
     const result = invoke(context)
     assert.equal(result.files.length, 0)
-    assert.match(result.messages.join('\n'), /project references are not supported/i)
+    assert.match(result.messages.join('\n'), /project reference is missing/i)
   } finally { await rm(context.root, { recursive: true, force: true }) }
 })
 
@@ -175,5 +175,74 @@ test('preserves an exported abstract class and nested literal property', { skip:
     await writeFile(join(context.pkg, 'index.d.mts'), result.files[0].replacement)
     const tsc = spawnSync(process.execPath, [join(context.root, 'node_modules/typescript/bin/tsc'), '--noEmit'], { cwd: context.root, encoding: 'utf8' })
     assert.equal(tsc.status, 0, tsc.stdout + tsc.stderr)
+  } finally { await rm(context.root, { recursive: true, force: true }) }
+})
+
+async function referencedFixture() {
+  const context = await fixture('export declare const count: number;\n', 'void 0;\n')
+  const common = { composite: true, module: 'nodenext', moduleResolution: 'nodenext', target: 'esnext', strict: true, types: [], skipLibCheck: false }
+  for (const name of ['a', 'b']) {
+    const dir = join(context.root, name)
+    await mkdir(dir)
+    await writeFile(join(dir, 'tsconfig.json'), JSON.stringify({ compilerOptions: { ...common, outDir: './out' }, include: ['index.mts'] }))
+    await writeFile(join(dir, 'index.mts'), name === 'a' ? 'import { count } from "xray-test-fixture"; export const value: number = count;\n' : 'export const other: number = 1;\n')
+  }
+  await writeFile(join(context.root, 'tsconfig.json'), JSON.stringify({ files: [], references: [{ path: './a' }, { path: './b' }] }))
+  const build = spawnSync(process.execPath, [join(context.root, 'node_modules/typescript/bin/tsc'), '--build'], { cwd: context.root, encoding: 'utf8' })
+  assert.equal(build.status, 0, build.stdout + build.stderr)
+  await writeFile(join(context.pkg, 'index.d.mts'), 'export const count: number = 1;\nexport type Choice = "left" | "right";\n')
+  return context
+}
+
+test('verifies all built TypeScript project references independently', { skip: unavailable }, async () => {
+  const context = await referencedFixture()
+  try {
+    const result = invoke(context)
+    assert.equal(result.files.length, 1, JSON.stringify(result.messages))
+    assert.match(result.files[0].replacement, /"left" \| "right"/)
+    await rm(join(context.root, 'b/out/index.d.mts'))
+    const unbuilt = invoke(context)
+    assert.equal(unbuilt.files.length, 0)
+    assert.match(unbuilt.messages.join('\n'), /unbuilt declaration outputs/i)
+    await writeFile(join(context.root, 'b/out/index.d.mts'), 'export declare const other: number;\n')
+    await writeFile(join(context.root, 'b/index.mts'), 'export const other: string = "fresh";\n')
+    const stale = invoke(context)
+    assert.equal(stale.files.length, 0)
+    assert.match(stale.messages.join('\n'), /stale or unverified/)
+    await writeFile(join(context.root, 'b/index.mts'), 'export const other: number = "bad";\n')
+    const failed = invoke(context)
+    assert.equal(failed.files.length, 0)
+    assert.match(failed.messages.join('\n'), /TS2322/)
+  } finally { await rm(context.root, { recursive: true, force: true }) }
+})
+
+test('rejects cyclic TypeScript project references', { skip: unavailable }, async () => {
+  const context = await referencedFixture()
+  try {
+    await writeFile(join(context.root, 'a/tsconfig.json'), JSON.stringify({ compilerOptions: { composite: true }, files: ['index.mts'], references: [{ path: '../b' }] }))
+    await writeFile(join(context.root, 'b/tsconfig.json'), JSON.stringify({ compilerOptions: { composite: true }, files: ['index.mts'], references: [{ path: '../a' }] }))
+    const result = invoke(context)
+    assert.equal(result.files.length, 0)
+    assert.match(result.messages.join('\n'), /cyclic/i)
+  } finally { await rm(context.root, { recursive: true, force: true }) }
+})
+
+test('downstream references see declarations inferred after repair', { skip: unavailable }, async () => {
+  const context = await fixture('export declare const count: any;\n', 'void 0;\n')
+  try {
+    const common = { composite: true, module: 'nodenext', moduleResolution: 'nodenext', target: 'esnext', strict: true, types: [], skipLibCheck: false, outDir: './out' }
+    for (const name of ['a', 'b']) await mkdir(join(context.root, name))
+    await writeFile(join(context.root, 'a/tsconfig.json'), JSON.stringify({ compilerOptions: common, include: ['index.mts'] }))
+    await writeFile(join(context.root, 'a/index.mts'), 'import { count } from "xray-test-fixture"; export const value = count;\n')
+    await writeFile(join(context.root, 'b/tsconfig.json'), JSON.stringify({ compilerOptions: common, include: ['index.mts'], references: [{ path: '../a' }] }))
+    await writeFile(join(context.root, 'tsconfig.json'), JSON.stringify({ files: [], references: [{ path: './b' }] }))
+    await writeFile(join(context.root, 'b/index.mts'), 'import { value } from "../a/out/index.mjs"; export const text: string = value;\n')
+    const build = spawnSync(process.execPath, [join(context.root, 'node_modules/typescript/bin/tsc'), '--build'], { cwd: context.root, encoding: 'utf8' })
+    assert.equal(build.status, 0, build.stdout + build.stderr)
+    await writeFile(join(context.pkg, 'index.d.mts'), 'export const count = ;\n')
+    await writeFile(join(context.pkg, 'index.mjs'), '/** @type {number} */ export const count = 1;\n')
+    const result = invoke(context)
+    assert.equal(result.files.length, 0, JSON.stringify(result))
+    assert.match(result.messages.join('\n'), /TS2322/)
   } finally { await rm(context.root, { recursive: true, force: true }) }
 })

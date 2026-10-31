@@ -20,23 +20,74 @@ function reject(reason, diagnostics = []) {
 const roots = JSON.parse(fs.readFileSync(rootsJson, 'utf8')).map(p => canonical(p)).sort((a, b) => b.split(path.sep).length - a.split(path.sep).length);
 const configPath = ts.findConfigFile(project, ts.sys.fileExists, 'tsconfig.json');
 if (!configPath || !samePath(real(path.dirname(configPath)), project)) throw new Error('type regeneration requires a tsconfig.json in the target project');
-const read = ts.readConfigFile(configPath, ts.sys.readFile);
-if (read.error) throw new Error(ts.flattenDiagnosticMessageText(read.error.messageText, '\n'));
-const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, project, undefined, configPath);
-if (parsed.errors.length) throw new Error(ts.formatDiagnostics(parsed.errors, diagnosticHost()));
-if (parsed.projectReferences?.length) reject('Declaration generation rejected: TypeScript project references are not supported.');
-// Verification always checks declarations, regardless of the project's skipLibCheck.
-const options = { ...parsed.options, skipLibCheck: false, noEmit: true, incremental: false, composite: false };
-const original = ts.createProgram(parsed.fileNames, options);
-const initial = ts.getPreEmitDiagnostics(original);
-const syntactic = original.getSyntacticDiagnostics();
-// TS1123 (empty variable declaration list) is reported by the semantic pass.
-const syntax = initial.filter(d => d.file && /\.d\.(?:ts|mts|cts)$/.test(d.file.fileName) &&
-  ([1036, 1039, 1046, 1123].includes(d.code) || syntactic.some(s => s.file === d.file && s.code === d.code && s.start === d.start)));
+// Keep every referenced project separate: each has its own compiler settings,
+// files and reference graph. Never infer a successful graph from the root alone.
+const contexts = [];
+const visiting = new Set();
+const visited = new Set();
+function loadConfig(file, referenced = false) {
+  const resolved = real(file);
+  if (!resolved || (!samePath(resolved, configPath) && !contained(resolved, project)))
+    reject(`TypeScript project reference is missing or outside the project: ${file}`);
+  const id = key(resolved);
+  if (visiting.has(id)) reject(`Cyclic TypeScript project reference: ${file}`);
+  if (visited.has(id)) return;
+  visiting.add(id);
+  const read = ts.readConfigFile(resolved, ts.sys.readFile);
+  if (read.error) throw new Error(ts.flattenDiagnosticMessageText(read.error.messageText, '\n'));
+  const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(resolved), undefined, resolved);
+  if (parsed.errors.length) throw new Error(ts.formatDiagnostics(parsed.errors, diagnosticHost()));
+  for (const reference of parsed.projectReferences ?? []) loadConfig(ts.resolveProjectReferencePath(reference), true);
+  const expectedOutputs = new Set();
+  if (referenced) {
+    if (!parsed.options.composite || parsed.options.noEmit) reject(`Referenced TypeScript project cannot produce declaration outputs: ${file}`);
+    for (const input of parsed.fileNames.filter(name => !/\.d\.(?:ts|mts|cts)$/.test(name))) {
+      let outputs;
+      try { outputs = ts.getOutputFileNames(parsed, input, !ts.sys.useCaseSensitiveFileNames); }
+      catch { reject(`Cannot determine TypeScript project outputs for ${input}.`); }
+      const declarations = outputs.filter(name => /\.d\.(?:ts|mts|cts)$/.test(name));
+      if (!declarations.length || declarations.some(name => !ts.sys.fileExists(name)))
+        reject(`Referenced TypeScript project has unbuilt declaration outputs: ${input}.`);
+      if (declarations.some(name => !real(name) || !contained(real(name), project)))
+        reject(`Referenced TypeScript project declaration output escapes the project: ${input}.`);
+      for (const name of declarations) expectedOutputs.add(key(name));
+    }
+  }
+  visiting.delete(id);
+  visited.add(id);
+  const options = { ...parsed.options, skipLibCheck: false, noEmit: true, incremental: parsed.options.composite ? true : false };
+  const original = ts.createProgram({ rootNames: parsed.fileNames, options, projectReferences: parsed.projectReferences });
+  if (referenced) {
+    // Existence alone is insufficient: importing projects otherwise validate
+    // stale declarations after a referenced project's source has changed.
+    const verificationOptions = { ...parsed.options, skipLibCheck: false, noEmit: false,
+      emitDeclarationOnly: true, noEmitOnError: false, incremental: true };
+    const verification = ts.createProgram({ rootNames: parsed.fileNames, options: verificationOptions, projectReferences: parsed.projectReferences });
+    const emitted = new Set();
+    let stale = false;
+    const result = verification.emit(undefined, (name, text) => {
+      if (!/\.d\.(?:ts|mts|cts)$/.test(name)) return;
+      emitted.add(key(name));
+      if (ts.sys.readFile(name) !== text) stale = true;
+    }, undefined, true);
+    if (result.emitSkipped || stale || [...expectedOutputs].some(name => !emitted.has(name)))
+      reject(`Referenced TypeScript project has stale or unverified declaration outputs: ${file}.`);
+  }
+  const initial = ts.getPreEmitDiagnostics(original);
+  const syntactic = original.getSyntacticDiagnostics();
+  const syntax = initial.filter(d => d.file && /\.d\.(?:ts|mts|cts)$/.test(d.file.fileName) &&
+    ([1036, 1039, 1046, 1123].includes(d.code) || syntactic.some(s => s.file === d.file && s.code === d.code && s.start === d.start)));
+  contexts.push({ parsed, options, original, initial, syntax, referenced, expectedOutputs });
+}
 const contained = (file, root) => { const p = path.relative(root, file); return p !== '' && !p.startsWith(`..${path.sep}`) && p !== '..' && !path.isAbsolute(p); };
+loadConfig(configPath);
+const initial = contexts.flatMap(context => context.initial);
+const syntax = contexts.flatMap(context => context.syntax);
 const candidates = new Map();
 const skipped = { missingDeclaration: 0, outsideRoots: 0, missingRuntime: 0, nonCanonicalRuntime: 0, sourceCollision: 0 };
 for (const diagnostic of syntax) {
+  const context = contexts.find(item => item.syntax.includes(diagnostic));
+  const { original } = context;
   const declaration = real(diagnostic.file.fileName);
   if (!declaration) { skipped.missingDeclaration++; continue; }
   const root = roots.find(root => contained(declaration, root));
@@ -46,12 +97,13 @@ for (const diagnostic of syntax) {
   const runtime = declaration.replace(/\.d\.(mts|cts|ts)$/, (_, ext) => ext === 'mts' ? '.mjs' : ext === 'cts' ? '.cjs' : '.js');
   if (!fs.existsSync(runtime)) { skipped.missingRuntime++; continue; }
   if (!samePath(real(runtime), runtime)) { skipped.nonCanonicalRuntime++; continue; }
-  const perFile = syntax.filter(item => samePath(real(item.file.fileName), declaration));
+  if (candidates.has(declaration)) continue;
+  const perFile = context.syntax.filter(item => samePath(real(item.file.fileName), declaration));
   let orphan;
   if (perFile.some(item => item.code === 1036)) {
     const file = diagnostic.file;
     const last = file.statements[file.statements.length - 1];
-    const fileDiagnostics = initial.filter(item => item.file && samePath(real(item.file.fileName), declaration));
+    const fileDiagnostics = context.initial.filter(item => item.file && samePath(real(item.file.fileName), declaration));
     const start = last?.getStart(file);
     const identifier = last && ts.isExpressionStatement(last) && ts.isIdentifier(last.expression) && last.expression;
     const checker = original.getTypeChecker();
@@ -66,7 +118,7 @@ for (const diagnostic of syntax) {
   const virtual = perFile.some(item => item.code === 1039) && perFile.every(item => [1039, 1046].includes(item.code));
   const virtualFile = declaration.replace(/\.d\.(mts|cts|ts)$/, '.$1');
   if (virtual && fs.existsSync(virtualFile)) { skipped.sourceCollision++; continue; }
-  candidates.set(declaration, { root, runtime, virtual, virtualFile, orphan,
+  candidates.set(declaration, { root, runtime, virtual, virtualFile, orphan, context,
     original: fs.readFileSync(declaration, 'utf8'), runtimeText: fs.readFileSync(runtime, 'utf8') });
 }
 if (!candidates.size || !initial.length) {
@@ -75,12 +127,17 @@ if (!candidates.size || !initial.length) {
 }
 
 const generated = new Map();
+const emitted = new Map();
+function generateForContext(context, candidates) {
+  const { options } = context;
+
 const emitOptions = { ...options, allowJs: true, checkJs: false, noEmit: false, declaration: true,
-  emitDeclarationOnly: true, noEmitOnError: false, outDir: path.join(project, '__xray_output__'), rootDir: undefined };
+  emitDeclarationOnly: true, noEmitOnError: false, composite: false, incremental: false, tsBuildInfoFile: undefined, outDir: path.join(project, '__xray_output__'), rootDir: undefined };
 const emitProgram = ts.createProgram([...candidates.values()].map(x => x.runtime), emitOptions);
 const emitDiagnostics = ts.getPreEmitDiagnostics(emitProgram);
 if (emitDiagnostics.length) reject('Declaration generation rejected: source compilation reported errors.', emitDiagnostics);
 const jsChecker = emitProgram.getTypeChecker();
+  emitted.set(context, { emitProgram, jsChecker });
 const output = new Map();
 const emit = emitProgram.emit(undefined, (name, text, _bom, _onError, sourceFiles) => {
   if (!name.endsWith('.d.ts') && !name.endsWith('.d.mts') && !name.endsWith('.d.cts')) return;
@@ -126,26 +183,59 @@ if (virtualSources.size) {
   }
 }
 
-const host = ts.createCompilerHost(options);
+}
+for (const context of contexts) {
+  const subset = new Map([...candidates].filter(([, value]) => value.context === context));
+  if (subset.size) generateForContext(context, subset);
+}
+
+const overlay = new Map(generated);
+for (const context of contexts) {
+  const { parsed, options, original, referenced, expectedOutputs } = context;
+  const host = ts.createCompilerHost(options);
 const originalRead = host.readFile.bind(host);
 const originalSource = host.getSourceFile.bind(host);
-host.readFile = file => generated.get(key(real(file))) ?? originalRead(file);
+host.readFile = file => overlay.get(key(real(file))) ?? originalRead(file);
 host.getSourceFile = (file, languageVersion, onError, shouldCreateNewSourceFile) => {
-  const text = generated.get(key(real(file)));
+  const text = overlay.get(key(real(file)));
   return text === undefined ? originalSource(file, languageVersion, onError, shouldCreateNewSourceFile) :
     ts.createSourceFile(file, text, languageVersion, true, ts.getScriptKindFromFileName(file));
 };
-const fixed = ts.createProgram(parsed.fileNames, options, host);
+const fixed = ts.createProgram({ rootNames: parsed.fileNames, options, host, projectReferences: parsed.projectReferences });
 const fixedDiagnostics = ts.getPreEmitDiagnostics(fixed);
 if (fixedDiagnostics.length) reject('Declaration generation rejected: consumer verification reported errors.', fixedDiagnostics);
+if (referenced) {
+  // Downstream programs must see declarations inferred from the repaired
+  // dependency, not the original on-disk output of this project.
+  const emitOptions = { ...parsed.options, skipLibCheck: false, noEmit: false,
+    emitDeclarationOnly: true, noEmitOnError: false, incremental: true };
+  const emitProgram = ts.createProgram({ rootNames: parsed.fileNames, options: emitOptions, host, projectReferences: parsed.projectReferences });
+  const emitDiagnostics = ts.getPreEmitDiagnostics(emitProgram);
+  if (emitDiagnostics.length) reject('Declaration generation rejected: referenced project emit reported errors.', emitDiagnostics);
+  const outputs = new Map();
+  const result = emitProgram.emit(undefined, (name, text) => {
+    if (/\.d\.(?:ts|mts|cts)$/.test(name)) outputs.set(key(name), text);
+  }, undefined, true);
+  if (result.emitSkipped || [...expectedOutputs].some(name => !outputs.has(name)))
+    reject('Declaration generation rejected: referenced project declaration emit was incomplete.');
+  for (const [name, text] of outputs) overlay.set(key(real(name) ?? name), text);
+}
 const fixedChecker = fixed.getTypeChecker();
 const originalChecker = original.getTypeChecker();
+  context.fixed = fixed;
+  context.fixedChecker = fixedChecker;
+  context.originalChecker = originalChecker;
+}
 const exportsOf = (checker, file) => {
   const symbol = checker.getSymbolAtLocation(file);
   return symbol && checker.getExportsOfModule(symbol).map(x => x.name).sort();
 };
-for (const [declaration, { runtime, virtual, orphan, original: originalText, runtimeText }] of candidates) {
+for (const [declaration, { runtime, virtual, orphan, original: originalText, runtimeText, context: emitContext }] of candidates) {
+  const { emitProgram, jsChecker } = emitted.get(emitContext);
   const source = emitProgram.getSourceFile(runtime);
+  const applicable = contexts.filter(context => context.original.getSourceFiles().some(file => samePath(real(file.fileName), declaration)));
+  if (!applicable.length) reject(`Declaration generation rejected: no consumer context for ${declaration}.`);
+  for (const { original, fixed, originalChecker, fixedChecker } of applicable) {
   // Preserve the filename spelling used by the consumer's program, which may be symlinked.
   const decl = fixed.getSourceFiles().find(file => samePath(real(file.fileName), declaration));
   const oldFile = original.getSourceFiles().find(file => samePath(real(file.fileName), declaration));
@@ -224,6 +314,7 @@ for (const [declaration, { runtime, virtual, orphan, original: originalText, run
     declarationExports.every(name => jsExports.includes(name)) : JSON.stringify(jsExports) === JSON.stringify(declarationExports));
   if (!compatible) {
     reject(`Declaration generation rejected: exports differ for ${runtime}.`);
+  }
   }
 }
 finish([...candidates].map(([file, value]) => ({
