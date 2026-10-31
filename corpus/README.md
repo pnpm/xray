@@ -28,7 +28,11 @@ expected findings; avoid relying on `latest` or executing untrusted package code
 ## Installation regression
 
 The separate integration test requires pnpm and installs pinned registry packages
-with lifecycle scripts disabled in temporary workspaces. It runs TypeScript before
+with lifecycle scripts disabled in temporary workspaces. There is no lockfile;
+transitive dependencies resolve only to versions published before the fixed
+`REGISTRY_CUTOFF` in `registry-cutoff.mjs`, enforced through pnpm's
+`minimumReleaseAge`. Move the cutoff forward when adding or bumping a pin; a
+pin newer than the cutoff fails the install. It runs TypeScript before
 and after applying `xray --fix` in both isolated and global virtual stores with
 hoisting disabled. Each run checks that dry-run does not write, existing settings
 and comments survive, and repeating the fix is idempotent. After reinstall, the
@@ -136,4 +140,5 @@ types case in `@vercel/sandbox` and a public Docusaurus deep declaration, in
 addition to runtime, rollback, recovery, cancellation, and separate-lockfile
 checks. The Docusaurus case installs a large dependency graph and can take
 several minutes. These tests run the explicitly provided consumer commands;
-fixture workspaces set `ignoreScripts: true` for pnpm installs.
+fixture workspaces set `ignoreScripts: true` for pnpm installs and resolve under
+the same registry cutoff as the installation regression.

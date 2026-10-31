@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 // Opt-in integration test: installs pinned registry packages with scripts disabled.
+// There is no lockfile, so transitive dependencies resolve fresh on each run, but
+// only to versions published before REGISTRY_CUTOFF (see registry-cutoff.mjs).
+// The test then runs code from that graph: tsc, vite, esbuild and node scripts.
 import { spawnSync } from 'node:child_process'
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { minimumReleaseAge } from './registry-cutoff.mjs'
 
 const binary = resolve(process.argv[2] ?? fileURLToPath(new URL('../target/debug/xray', import.meta.url)))
 const temp = await mkdtemp(join(tmpdir(), 'xray-install-'))
+const releaseAge = minimumReleaseAge()
 function run(command, args, cwd) {
   const result = spawnSync(command, args, { cwd, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024, timeout: 180_000 })
   if (result.error) throw result.error
@@ -52,7 +57,7 @@ try {
     const root = join(temp, globalStore ? 'global' : 'isolated')
     const app = join(root, 'packages/app')
     await mkdir(app, { recursive: true })
-    const settings = `# corpus settings comment\npackages:\n  - packages/*\nhoist: false\nminimumReleaseAge: 0\nenableGlobalVirtualStore: ${globalStore}\nstoreDir: ${join(temp, 'store')}\n`
+    const settings = `# corpus settings comment\npackages:\n  - packages/*\nhoist: false\nminimumReleaseAge: ${releaseAge}\nenableGlobalVirtualStore: ${globalStore}\nstoreDir: ${join(temp, 'store')}\n`
     const workspace = join(root, 'pnpm-workspace.yaml')
     await writeFile(workspace, settings)
     await writeFile(join(app, 'package.json'), JSON.stringify({ name: 'xray-corpus-consumer', private: true, type: 'module', dependencies: { '@medplum/core': '5.2.13', '@types/node': '22.19.15', typescript: '5.9.3' } }))
