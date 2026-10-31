@@ -8,9 +8,14 @@ use std::{
 use walkdir::WalkDir;
 use yaml_rust2::{Yaml, YamlLoader};
 
+/// The root, every importer of the root lockfile, and every package matched by
+/// the workspace `packages` globs. Both sources are read: with
+/// `sharedWorkspaceLockfile: false` the root lockfile lists only the root, and
+/// each member records itself in its own lockfile.
 pub fn projects(root: &Path) -> Result<Vec<PathBuf>> {
     let root = root.canonicalize()?;
     let mut projects = BTreeSet::from([root.clone()]);
+    let mut listed_importers = false;
     let lockfile = root.join("pnpm-lock.yaml");
     if lockfile.is_file() {
         let raw = std::fs::read_to_string(&lockfile)
@@ -20,6 +25,7 @@ pub fn projects(root: &Path) -> Result<Vec<PathBuf>> {
         if let Some(importers) =
             documents.first().and_then(|document| document["importers"].as_hash())
         {
+            listed_importers = true;
             for importer in importers.keys().filter_map(Yaml::as_str) {
                 if let Ok(project) = root.join(importer).canonicalize() {
                     if project.starts_with(&root) {
@@ -27,7 +33,6 @@ pub fn projects(root: &Path) -> Result<Vec<PathBuf>> {
                     }
                 }
             }
-            return Ok(projects.into_iter().collect());
         }
     }
     let config = root.join("pnpm-workspace.yaml");
@@ -41,6 +46,10 @@ pub fn projects(root: &Path) -> Result<Vec<PathBuf>> {
     let configured = documents.first().map(|document| &document["packages"]);
     let default = vec![Yaml::String("**".into())];
     let patterns = match configured {
+        // A lockfile already names the importers of an implicit workspace.
+        None | Some(Yaml::Null | Yaml::BadValue) if listed_importers => {
+            return Ok(projects.into_iter().collect())
+        }
         None | Some(Yaml::Null | Yaml::BadValue) => &default,
         Some(value) => value.as_vec().context("workspace packages must be an array")?,
     };
