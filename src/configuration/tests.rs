@@ -1,6 +1,8 @@
-use super::apply_text;
-use crate::report::{Finding, Severity};
-use crate::{report::PackageReport, scan::Origin};
+use super::{apply_text, workspace_root};
+use crate::{
+    report::{Finding, PackageReport, Severity},
+    scan::Origin,
+};
 use std::collections::BTreeSet;
 
 fn report(origin: Origin) -> Vec<PackageReport> {
@@ -22,7 +24,7 @@ fn honors_version_scoped_and_broad_configured_extensions() {
         let mut reports = report(Origin::Runtime);
         apply_text(
             &format!(
-                "packageExtensions:\n  '{selector}':\n    dependencies:\n      helper: '^1'\n"
+                "packageExtensions:\n  '{selector}':\n    dependencies:\n      helper: '^1'\n",
             ),
             &mut reports,
         )
@@ -49,4 +51,15 @@ fn configured_types_satisfy_only_erased_imports() {
         apply_text(yaml, &mut reports).unwrap();
         assert_eq!(reports.len(), 1);
     }
+}
+
+#[test]
+fn workspace_members_resolve_the_nearest_settings_file() {
+    let root = tempfile::tempdir().unwrap();
+    let member = root.path().join("packages/member");
+    std::fs::create_dir_all(&member).unwrap();
+    std::fs::write(root.path().join("pnpm-workspace.yaml"), "packages: [packages/*]\n").unwrap();
+    assert_eq!(workspace_root(&member).unwrap(), root.path().canonicalize().unwrap());
+    std::fs::write(member.join("pnpm-workspace.yaml"), "packages: []\n").unwrap();
+    assert_eq!(workspace_root(&member).unwrap(), member.canonicalize().unwrap());
 }

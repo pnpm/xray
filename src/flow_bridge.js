@@ -11,7 +11,7 @@ const found = [];
 // the nearest function or program scope.
 const scopes = new WeakMap();
 const skippedKeys = new Set(['loc', 'range', 'comments', 'leadingComments', 'trailingComments', 'errors']);
-function scope(parent, functionScope = false) { return { parent, functionScope, requireBound: false }; }
+function scope(parent, functionScope = false) { return { parent, functionScope, bound: new Set() }; }
 function functionParent(current) {
   while (current.parent && !current.functionScope) current = current.parent;
   return current;
@@ -19,22 +19,22 @@ function functionParent(current) {
 function collect(node, current) {
   if (!node || typeof node !== 'object') return;
   if (Array.isArray(node)) { for (const item of node) collect(item, current); return; }
-  if (node.type === 'FunctionDeclaration' && bindingContainsRequire(node.id)) current.requireBound = true;
-  if (node.type === 'ClassDeclaration' && bindingContainsRequire(node.id)) current.requireBound = true;
+  if (node.type === 'FunctionDeclaration') bind(current, node.id);
+  if (node.type === 'ClassDeclaration') bind(current, node.id);
   if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) {
     current = scope(current, true);
-    if (bindingContainsRequire(node.id) || node.params.some(bindingContainsRequire)) current.requireBound = true;
+    bind(current, node.id); for (const param of node.params) bind(current, param);
   } else if (node.type === 'ClassExpression') {
     current = scope(current);
-    if (bindingContainsRequire(node.id)) current.requireBound = true;
+    bind(current, node.id);
   } else if (['BlockStatement', 'CatchClause', 'ForStatement', 'ForInStatement', 'ForOfStatement', 'SwitchStatement'].includes(node.type)) {
     current = scope(current);
-    if (node.type === 'CatchClause' && bindingContainsRequire(node.param)) current.requireBound = true;
+    if (node.type === 'CatchClause') bind(current, node.param);
   }
   scopes.set(node, current);
   if (node.type === 'VariableDeclaration') {
     const bindingScope = node.kind === 'var' ? functionParent(current) : current;
-    if (node.declarations.some(decl => bindingContainsRequire(decl.id))) bindingScope.requireBound = true;
+    for (const decl of node.declarations) bind(bindingScope, decl.id);
     for (const decl of node.declarations) {
       if (decl.init && decl.init.type === 'CallExpression' &&
           (decl.init.callee.name === 'createRequire' || decl.init.callee.property?.name === 'createRequire')) {
@@ -42,31 +42,38 @@ function collect(node, current) {
       }
     }
   }
-  if (node.type === 'ImportDeclaration' && node.importKind !== 'type' && node.importKind !== 'typeof' &&
-      node.specifiers.some(specifier => specifier.importKind !== 'type' && specifier.importKind !== 'typeof' && bindingContainsRequire(specifier.local))) current.requireBound = true;
+  if (node.type === 'ImportDeclaration' && node.importKind !== 'type' && node.importKind !== 'typeof')
+    for (const specifier of node.specifiers) if (specifier.importKind !== 'type' && specifier.importKind !== 'typeof') bind(current, specifier.local);
   for (const [key, value] of Object.entries(node)) if (!skippedKeys.has(key)) collect(value, current);
 }
-function shadowed(current) {
-  while (current) { if (current.requireBound) return true; current = current.parent; }
+function shadowed(current, name) {
+  while (current) { if (current.bound.has(name)) return true; current = current.parent; }
   return false;
 }
-function bindingContainsRequire(pattern) {
+function bindingContains(pattern, name) {
   if (!pattern || typeof pattern !== 'object') return false;
-  if (pattern.type === 'Identifier') return pattern.name === 'require';
-  if (pattern.type === 'AssignmentPattern') return bindingContainsRequire(pattern.left);
-  if (pattern.type === 'RestElement') return bindingContainsRequire(pattern.argument);
-  if (pattern.type === 'ObjectPattern') return pattern.properties.some(property => bindingContainsRequire(property.value || property.argument));
-  if (pattern.type === 'ArrayPattern') return pattern.elements.some(bindingContainsRequire);
+  if (pattern.type === 'Identifier') return pattern.name === name;
+  if (pattern.type === 'AssignmentPattern') return bindingContains(pattern.left, name);
+  if (pattern.type === 'RestElement') return bindingContains(pattern.argument, name);
+  if (pattern.type === 'ObjectPattern') return pattern.properties.some(property => bindingContains(property.value || property.argument, name));
+  if (pattern.type === 'ArrayPattern') return pattern.elements.some(element => bindingContains(element, name));
   return false;
+}
+function bind(current, pattern) {
+  for (const name of ['require', 'module']) if (bindingContains(pattern, name)) current.bound.add(name);
 }
 function record(literal, origin) {
   if (literal && literal.type === 'Literal' && typeof literal.value === 'string') {
     found.push([literal.value, origin, literal.range[0]]);
   }
 }
-function isRequire(callee) {
-  return callee && (callee.type === 'Identifier' && callee.name === 'require' ||
-    callee.type === 'MemberExpression' && !callee.computed && callee.property.name === 'resolve' && isRequire(callee.object));
+function isRequire(callee, current) {
+  if (!callee) return false;
+  if (callee.type === 'Identifier') return callee.name === 'require' && !shadowed(current, 'require');
+  if (callee.type !== 'MemberExpression') return false;
+  const name = callee.computed ? callee.property.value : callee.property.name;
+  if (name === 'resolve') return isRequire(callee.object, current);
+  return name === 'require' && callee.object.type === 'Identifier' && callee.object.name === 'module' && !shadowed(current, 'module');
 }
 function visit(node) {
   if (!node || typeof node !== 'object') return;
@@ -75,7 +82,7 @@ function visit(node) {
     case 'ImportDeclaration': record(node.source, node.importKind === 'type' || node.importKind === 'typeof' ? 'types' : 'runtime'); break;
     case 'ExportNamedDeclaration': case 'ExportAllDeclaration': record(node.source, node.exportKind === 'type' ? 'types' : 'runtime'); break;
     case 'ImportExpression': record(node.source, 'runtime'); break;
-    case 'CallExpression': if (isRequire(node.callee) && !shadowed(scopes.get(node))) record(node.arguments[0], 'runtime'); break;
+    case 'CallExpression': if (isRequire(node.callee, scopes.get(node))) record(node.arguments[0], 'runtime'); break;
   }
   for (const [key, value] of Object.entries(node)) {
     if (!skippedKeys.has(key)) visit(value);

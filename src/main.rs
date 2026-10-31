@@ -1,14 +1,17 @@
 mod analyze;
 mod classify;
 mod configuration;
+mod declaration_patch;
 mod discovery;
 mod manifest;
 mod reachable;
+mod regenerate;
 mod repair;
 mod repair_conflicts;
 mod repair_plan;
 mod report;
 mod scan;
+mod style;
 mod trace;
 
 #[cfg(test)]
@@ -21,7 +24,11 @@ use crate::{
 };
 use anyhow::Result;
 use clap::Parser;
-use std::{ffi::OsString, path::PathBuf, process::ExitCode};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 /// Packages published to npm routinely import things they never declared. Under
 /// a hoisted `node_modules` those imports resolve by accident; under a strict or
@@ -70,6 +77,11 @@ struct Args {
     #[arg(long, requires = "fix")]
     dry_run: bool,
 
+    /// Propose pnpm patches for malformed declarations only when the local
+    /// TypeScript compiler verifies the full project with no remaining errors.
+    #[arg(long, requires = "fix", conflicts_with = "trace")]
+    regenerate_types: bool,
+
     /// Observe failed Node module resolutions while running a command after --.
     /// Requires Node 22.15+; observations may be caught optional integrations.
     #[arg(long, requires = "command", conflicts_with_all = ["package", "json", "package_extensions", "all_files"])]
@@ -84,25 +96,19 @@ fn main() -> Result<ExitCode> {
     let args = Args::parse();
     let packages =
         if args.package { vec![args.path.clone()] } else { installed_packages(&args.path)? };
+    let workspace =
+        if args.package { args.path.clone() } else { configuration::workspace_root(&args.path)? };
+    let providers = if !args.package
+        && workspace != args.path.canonicalize()?
+        && workspace.join("node_modules").is_dir()
+    {
+        installed_packages(&workspace)?
+    } else {
+        packages.clone()
+    };
 
     if args.trace {
-        let observed = trace::run(&args.command, &packages, &args.path)?;
-        if !observed.reports.is_empty() {
-            eprintln!("Observed failed Node resolutions; optional imports may have been caught:");
-            eprint!("{}", report::as_text(&observed.reports));
-        }
-        for diagnostic in &observed.diagnostics {
-            eprintln!(
-                "Observed resolution failure in {}: {}: {}",
-                diagnostic.package, diagnostic.file, diagnostic.message
-            );
-        }
-        if args.fix {
-            let mut reports = observed.reports;
-            configuration::apply(&args.path, &mut reports)?;
-            write_repairs(&args, &reports, &packages)?;
-        }
-        return Ok(ExitCode::from(u8::try_from(observed.status.code().unwrap_or(1)).unwrap_or(1)));
+        return run_trace(&args, &workspace, &providers);
     }
 
     let scope = if args.all_files { Scope::EveryFile } else { Scope::Declared };
@@ -144,13 +150,13 @@ fn main() -> Result<ExitCode> {
         if !diagnostics.is_empty() {
             eprintln!(
                 "Scan incomplete: {} diagnostics; affected packages are excluded from repair.",
-                diagnostics.len()
+                diagnostics.len(),
             );
         }
     }
     let mut reports = report::merge_reports(reports);
     if !args.package {
-        configuration::apply(&args.path, &mut reports)?;
+        configuration::apply(&workspace, &mut reports)?;
     }
     let status = if !diagnostics.is_empty() {
         ExitCode::from(2)
@@ -161,7 +167,7 @@ fn main() -> Result<ExitCode> {
     };
 
     if args.fix {
-        write_repairs(&args, &reports, &packages)?;
+        write_repairs(&args, &workspace, &reports, &providers)?;
         return Ok(status);
     }
 
@@ -171,7 +177,7 @@ fn main() -> Result<ExitCode> {
         if args.package {
             report::as_package_extensions(&reports)
         } else {
-            report::as_package_extensions(&repair_plan::select(&reports, &packages, &args.path)?)
+            report::as_package_extensions(&repair_plan::select(&reports, &providers, &workspace)?)
         }
     } else if reports.is_empty() && !diagnostics.is_empty() {
         "Scan incomplete; no dependency findings in successfully analyzed files.\n".to_string()
@@ -183,9 +189,33 @@ fn main() -> Result<ExitCode> {
     Ok(status)
 }
 
-fn write_repairs(args: &Args, reports: &[PackageReport], packages: &[PathBuf]) -> Result<()> {
-    let selected = repair_plan::select(reports, packages, &args.path)?;
-    let proposed = report::as_package_extensions(&selected);
+fn write_repairs(
+    args: &Args,
+    workspace: &Path,
+    reports: &[PackageReport],
+    packages: &[PathBuf],
+) -> Result<()> {
+    let selected = repair_plan::select(reports, packages, workspace)?;
+    let regenerated = if args.regenerate_types {
+        let proposal = regenerate::propose(&args.path, packages)?;
+        for message in proposal.messages {
+            eprintln!("Declaration verification: {message}");
+        }
+        proposal.patches
+    } else {
+        Vec::new()
+    };
+    let patch_plan = declaration_patch::plan(&regenerated, packages)?;
+    let proposed =
+        format!("{}{}", report::as_package_extensions(&selected), patch_plan.configuration);
+    for patch in &regenerated {
+        eprintln!(
+            "Verified {} declaration replacements for {} with TypeScript {}.",
+            patch.files.len(),
+            patch.package,
+            patch.compiler,
+        );
+    }
     let total: usize = reports.iter().map(|report| report.findings.len()).sum();
     let repaired: usize = selected.iter().map(|report| report.findings.len()).sum();
     if total > repaired {
@@ -196,13 +226,36 @@ fn write_repairs(args: &Args, reports: &[PackageReport], packages: &[PathBuf]) -
     }
     if args.dry_run {
         print!("{proposed}");
+        for (path, content) in &patch_plan.artifacts {
+            eprintln!("Proposed {}:\n{content}", path.display());
+        }
     } else {
-        let workspace = args.path.join("pnpm-workspace.yaml");
-        if repair::apply(&workspace, &proposed)? {
+        let workspace = workspace.join("pnpm-workspace.yaml");
+        if declaration_patch::apply(&workspace, &proposed, &patch_plan)? {
             println!("Updated {}. Run pnpm install to apply the repairs.", workspace.display());
         } else {
             println!("No changes to workspace settings.");
         }
     }
     Ok(())
+}
+
+fn run_trace(args: &Args, workspace: &Path, providers: &[PathBuf]) -> Result<ExitCode> {
+    let observed = trace::run(&args.command, providers, &args.path)?;
+    if !observed.reports.is_empty() {
+        eprintln!("Observed failed Node resolutions; optional imports may have been caught:");
+        eprint!("{}", report::as_text(&observed.reports));
+    }
+    for diagnostic in &observed.diagnostics {
+        eprintln!(
+            "Observed resolution failure in {}: {}: {}",
+            diagnostic.package, diagnostic.file, diagnostic.message,
+        );
+    }
+    if args.fix {
+        let mut reports = observed.reports;
+        configuration::apply(workspace, &mut reports)?;
+        write_repairs(args, workspace, &reports, providers)?;
+    }
+    Ok(ExitCode::from(u8::try_from(observed.status.code().unwrap_or(1)).unwrap_or(1)))
 }

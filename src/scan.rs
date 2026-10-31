@@ -15,7 +15,6 @@ use std::{
     io::Write,
     path::Path,
     process::{Command, Stdio},
-    sync::OnceLock,
 };
 
 /// Every module specifier a file asks for.
@@ -39,7 +38,21 @@ pub fn references(
     source: &str,
     path: &Path,
 ) -> Result<BTreeSet<(Requirement, Origin, u32)>, String> {
-    if !is_declaration(path) && has_flow_pragma(source) {
+    if is_stylesheet(path) {
+        return crate::style::parse(path, source)?
+            .into_iter()
+            .map(|reference| {
+                let offset = u32::try_from(reference.offset)
+                    .map_err(|_| "stylesheet exceeds supported size".to_string())?;
+                Ok((
+                    Requirement::Style(reference.specifier, reference.kind),
+                    Origin::Runtime,
+                    offset,
+                ))
+            })
+            .collect();
+    }
+    if !is_typescript(path) && has_flow_pragma(source) {
         return flow_references(source);
     }
     let allocator = Allocator::default();
@@ -123,19 +136,12 @@ fn has_flow_pragma(source: &str) -> bool {
 }
 
 fn flow_references(source: &str) -> Result<BTreeSet<(Requirement, Origin, u32)>, String> {
-    static PARSER_DIR: OnceLock<Result<tempfile::TempDir, String>> = OnceLock::new();
-    let dir = PARSER_DIR
-        .get_or_init(|| {
-            let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
-            std::fs::write(
-                dir.path().join("flow_parser.js"),
-                include_bytes!("../vendor/flow-parser/flow_parser.js"),
-            )
-            .map_err(|error| error.to_string())?;
-            Ok(dir)
-        })
-        .as_ref()
-        .map_err(Clone::clone)?;
+    let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
+    std::fs::write(
+        dir.path().join("flow_parser.js"),
+        include_bytes!("../vendor/flow-parser/flow_parser.js"),
+    )
+    .map_err(|error| error.to_string())?;
     let mut child = Command::new("node")
         .arg("-e")
         .arg(include_str!("flow_bridge.js"))
@@ -146,16 +152,15 @@ fn flow_references(source: &str) -> Result<BTreeSet<(Requirement, Origin, u32)>,
         .spawn()
         .map_err(|error| format!("starting Flow parser (Node.js required): {error}"))?;
     let mut stdin = child.stdin.take().ok_or("Flow parser stdin unavailable")?;
-    stdin
-        .write_all(source.as_bytes())
-        .map_err(|error| format!("sending source to Flow parser: {error}"))?;
+    let write_result = stdin.write_all(source.as_bytes());
     drop(stdin);
     let output =
         child.wait_with_output().map_err(|error| format!("waiting for Flow parser: {error}"))?;
+    write_result.map_err(|error| format!("sending source to Flow parser: {error}"))?;
     if !output.status.success() {
         return Err(format!(
             "Flow parser failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            String::from_utf8_lossy(&output.stderr).trim(),
         ));
     }
     let values: Vec<(String, String, u32)> = serde_json::from_slice(&output.stdout)
@@ -198,12 +203,19 @@ impl Origin {
 /// Extensions this scanner can read: what a package ships as behaviour, and
 /// what it ships as types. A manifest can point at a `.json` or an asset, and
 /// those are not source.
-const SCANNABLE: &[&str] = &[".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx"];
+const SCANNABLE: &[&str] = &[
+    ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx", ".css", ".scss", ".sass", ".less",
+];
 
 /// Whether a file is worth handing to the parser at all.
 pub fn is_scannable(path: &Path) -> bool {
     let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
     SCANNABLE.iter().any(|extension| name.ends_with(extension))
+}
+
+pub fn is_stylesheet(path: &Path) -> bool {
+    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    [".css", ".scss", ".sass", ".less"].iter().any(|extension| name.ends_with(extension))
 }
 
 /// Whether a path names a file that carries types rather than behaviour. The two
@@ -229,6 +241,8 @@ pub enum Requirement {
     TypesReference(String),
     /// A triple-slash path is relative to its containing file, even without `./`.
     PathReference(String),
+    /// A stylesheet import, whose bare path may resolve to a local Sass partial.
+    Style(String, crate::style::StyleKind),
 }
 
 /// Declaration files are module syntax whatever their extension — a `.d.cts`
@@ -247,17 +261,24 @@ fn parse<'a>(
 
     let source_type = SourceType::from_path(path).unwrap_or_else(|_| SourceType::mjs());
     let first = Parser::new(allocator, source, source_type).parse();
-    if !first.panicked {
+    if !first.panicked && first.diagnostics.is_empty() {
         return Ok(first.program);
     }
     let alternate = source_type.with_module(!source_type.is_module());
     let second = Parser::new(allocator, source, alternate).parse();
-    if !second.panicked {
+    if !second.panicked && second.diagnostics.is_empty() {
         return Ok(second.program);
+    }
+    // Node wraps CommonJS in a function, so a top-level return is valid there.
+    if path.extension().is_some_and(|extension| extension == "js" || extension == "cjs") {
+        let commonjs = Parser::new(allocator, source, source_type.with_commonjs(true)).parse();
+        if !commonjs.panicked && commonjs.diagnostics.is_empty() {
+            return Ok(commonjs.program);
+        }
     }
     // JSX is often published with a `.js` extension for bundlers.
     let jsx = Parser::new(allocator, source, source_type.with_jsx(true)).parse();
-    if !jsx.panicked {
+    if !jsx.panicked && jsx.diagnostics.is_empty() {
         return Ok(jsx.program);
     }
     finish(Parser::new(allocator, source, alternate.with_jsx(true)).parse())
@@ -291,7 +312,7 @@ fn normalize_export_assignment(source: &str) -> String {
 }
 
 fn finish(parsed: oxc_parser::ParserReturn<'_>) -> Result<oxc_ast::ast::Program<'_>, String> {
-    if parsed.panicked {
+    if parsed.panicked || !parsed.diagnostics.is_empty() {
         return Err(parsed
             .diagnostics
             .first()
@@ -387,8 +408,27 @@ fn is_require(
             }
         }
         Expression::StaticMemberExpression(member) => {
-            member.property.name == "resolve"
-                && is_require(&member.object, scoping, require_bindings)
+            (member.property.name == "resolve"
+                && is_require(&member.object, scoping, require_bindings))
+                || (member.property.name == "require" && is_global_module(&member.object, scoping))
+        }
+        Expression::ComputedMemberExpression(member) => {
+            matches!(&member.expression, Expression::StringLiteral(name) if name.value == "require")
+                && is_global_module(&member.object, scoping)
+        }
+        _ => false,
+    }
+}
+
+fn is_global_module(expression: &Expression<'_>, scoping: &Scoping) -> bool {
+    match expression {
+        Expression::Identifier(name) => {
+            name.name == "module"
+                && name
+                    .reference_id
+                    .get()
+                    .and_then(|id| scoping.get_reference(id).symbol_id())
+                    .is_none()
         }
         _ => false,
     }

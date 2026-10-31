@@ -43,14 +43,18 @@ status before repair, then succeeds after repair. The JSS case disables
 pnpm’s built-in compatibility database so the original undeclared dependency
 can be reproduced; its consumer supplies the missing runtime package. The
 Rollup case verifies that a missing declaration resolves through the installed
-`@types/estree` provider rather than a guessed `estree` package.
+`@types/estree` provider rather than a guessed `estree` package. The Material
+Components case verifies undeclared Sass subpath imports by running a real Vite
+build before and after the repair. The unenv case verifies opt-in declaration
+regeneration with compatible TypeScript and Node types, and checks that an
+incompatible Node types version produces no patch or workspace changes.
 
 ```sh
 cargo build
 node corpus/install-test.mjs
 ```
 
-The integration test covers five known broken releases; it does not establish that
+The integration test covers nine known broken releases; it does not establish that
 all generated fixes are safe or that every registry package has been checked.
 
 ## CLI safety checks
@@ -59,3 +63,7 @@ Run `node corpus/safety-test.mjs` to exercise conflicting extensions, parse
 failures and independent-package repairs, dry-run writes, reuse of an installed modern type provider across
 historical dev ranges, and trace stream and exit-status handling with local
 synthetic packages. These checks do not fetch or execute registry code.
+
+Some candidates were discovered using the public [nubjs package-extensions
+dataset](https://github.com/nubjs/package-extensions). Their tarballs and failure
+conditions were independently verified here; the rest of that dataset was not.

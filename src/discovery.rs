@@ -22,6 +22,7 @@ pub fn installed_packages(root: &Path) -> Result<Vec<PathBuf>> {
         );
     }
 
+    let mut workspace_roots = HashSet::from([root.canonicalize()?]);
     let mut queue = vec![root_modules.clone(), root_modules.join(".pnpm/node_modules")];
     // With hoisting disabled, workspace-only dependencies need not be reachable
     // from the root package. The installed lockfile lists every importer.
@@ -37,6 +38,7 @@ pub fn installed_packages(root: &Path) -> Result<Vec<PathBuf>> {
                 let Ok(project) = root.join(importer).canonicalize() else { continue };
                 if project.starts_with(&canonical_root) {
                     queue.push(project.join("node_modules"));
+                    workspace_roots.insert(project);
                 }
             }
         }
@@ -60,7 +62,12 @@ pub fn installed_packages(root: &Path) -> Result<Vec<PathBuf>> {
             if let Some(modules_dir) = nearest_modules_dir(&real) {
                 queue.push(modules_dir);
             }
-            packages.insert(real);
+            // Workspace sources can legitimately import build/test dependencies
+            // and are not registry artifacts. Traverse their links, but inspect
+            // them only when the user explicitly requests --package.
+            if !workspace_roots.contains(&real) {
+                packages.insert(real);
+            }
         }
     }
     Ok(packages.into_iter().collect())

@@ -1,7 +1,9 @@
 #![cfg(unix)]
 
+use super::test_helpers::analyze;
+
 use crate::{
-    analyze::{analyze, scannable_files, Scope},
+    analyze::{scannable_files, Scope},
     fixtures::global_virtual_store,
     report::Severity,
     scan::Origin,
@@ -125,6 +127,36 @@ fn imports_map_targets_are_followed_and_external_dependencies_reported() {
 }
 
 #[test]
+fn browser_mappings_are_followed_only_for_reached_runtime_references() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest(
+            "pkg",
+            r#","exports":"./index.js","types":"./types.d.ts","browser":{"crypto":"crypto-polyfill","./server.js":"./browser.js","types-only":"not-runtime","unused":"unused-polyfill"}"#,
+        ),
+    );
+    write(&dir.join("index.js"), "require('crypto'); require('./server');");
+    write(&dir.join("server.js"), "require('server-dependency');");
+    write(&dir.join("browser.js"), "require('browser-dependency');");
+    write(&dir.join("types.d.ts"), "import type { T } from 'types-only';");
+    let report = crate::analyze::analyze_for_repair(&dir, Scope::Declared).unwrap().unwrap();
+    let names: Vec<_> = report.findings.iter().map(|finding| finding.dependency.as_str()).collect();
+    assert_eq!(names, ["browser-dependency", "crypto-polyfill", "server-dependency", "types-only"]);
+    let evidence = report
+        .findings
+        .iter()
+        .find(|finding| finding.dependency == "crypto-polyfill")
+        .unwrap()
+        .evidence
+        .first()
+        .unwrap();
+    assert_eq!((evidence.file.as_str(), evidence.specifier.as_str()), ("index.js", "crypto"));
+}
+
+#[test]
 fn findings_include_all_precise_source_references_and_import_aliases() {
     use crate::fixtures::{manifest, write};
     let root = tempfile::tempdir().unwrap();
@@ -157,7 +189,7 @@ fn findings_include_all_precise_source_references_and_import_aliases() {
             ("index.js", 1, 15, "missing", Origin::Runtime),
             ("index.js", 2, 9, "#dep", Origin::Runtime),
             ("index.js", 3, 8, "missing", Origin::Runtime),
-        ]
+        ],
     );
     let types_reference =
         report.findings.iter().find(|finding| finding.dependency == "@types/missing").unwrap();
@@ -181,6 +213,56 @@ fn types_only_import_uses_the_authors_dev_types_package() {
     assert_eq!(report.findings[0].dependency, "@types/example");
     assert_eq!(report.findings[0].declared_range.as_deref(), Some("^2"));
     assert_eq!(report.findings[0].evidence.first().unwrap().specifier, "example");
+}
+
+#[test]
+fn stylesheet_entries_follow_local_partials_and_report_external_packages() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest(
+            "pkg",
+            r#","exports":{"./style":"./style.scss"},"sass":"./style.scss","dependencies":{"declared":"1"}"#,
+        ),
+    );
+    write(&dir.join("style.scss"), "@use 'tokens';\n@forward '@scope/missing/mixins';\n@import 'legacy';\n@use '~webpack-package/item';\n");
+    write(&dir.join("_tokens.scss"), "@use 'declared/item';\n@use 'nested-missing/item';\n");
+    write(&dir.join("_legacy.import.scss"), "@use 'legacy-missing/item';\n");
+    write(&dir.join("_legacy.scss"), "@use 'wrong-legacy/item';\n");
+    let report = crate::analyze::analyze_for_repair(&dir, Scope::Declared).unwrap().unwrap();
+    let names: Vec<_> = report.findings.iter().map(|finding| finding.dependency.as_str()).collect();
+    assert_eq!(names, ["@scope/missing", "legacy-missing", "nested-missing", "webpack-package"]);
+    let evidence = report.findings[0].evidence.first().unwrap();
+    assert_eq!(
+        (evidence.file.as_str(), evidence.line, evidence.specifier.as_str()),
+        ("style.scss", 2, "@scope/missing/mixins"),
+    );
+}
+
+#[test]
+fn repair_scans_public_stylesheet_subpaths_without_manifest_entry() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", ""));
+    write(&dir.join("component.import.scss"), "@forward '@scope/missing/mixins';");
+    let report = crate::analyze::analyze_for_repair(&dir, Scope::Declared).unwrap().unwrap();
+    assert_eq!(report.findings[0].dependency, "@scope/missing");
+}
+
+#[test]
+fn sass_package_importer_is_resolved_as_a_package() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","sass":"./style.scss""#));
+    write(&dir.join("style.scss"), "@use 'pkg:@scope/library/theme';\n@use 'sass:math';\n");
+    let report = crate::analyze::analyze_for_repair(&dir, Scope::Declared).unwrap().unwrap();
+    assert_eq!(report.findings.len(), 1);
+    assert_eq!(report.findings[0].dependency, "@scope/library");
+    assert_eq!(report.findings[0].evidence.first().unwrap().specifier, "pkg:@scope/library/theme");
 }
 
 #[test]

@@ -69,8 +69,16 @@ fn reachable_files_inner(
             Err(_) => continue,
         };
         let parent = file.parent().unwrap_or(package_dir);
-        for (requirement, _origin) in found {
+        for (requirement, origin) in found {
             let specifier = match requirement {
+                scan::Requirement::Style(specifier, kind) => {
+                    for target in resolve_style(parent, &specifier, kind) {
+                        if target.starts_with(&root) {
+                            queue.push(target);
+                        }
+                    }
+                    continue;
+                }
                 scan::Requirement::PathReference(specifier) => {
                     match resolve_relative(parent, &specifier) {
                         Some(target) if target.starts_with(&root) => queue.push(target),
@@ -81,6 +89,17 @@ fn reachable_files_inner(
                 scan::Requirement::Module(specifier) => specifier,
                 scan::Requirement::TypesReference(_) => continue,
             };
+            if origin == scan::Origin::Runtime {
+                for target in browser_replacements(manifest, &root, parent, &specifier) {
+                    if target.starts_with("./") {
+                        if let Some(file) = resolve_relative(&root, &target) {
+                            if file.starts_with(&root) {
+                                queue.push(file);
+                            }
+                        }
+                    }
+                }
+            }
             if specifier.starts_with('#') {
                 for target in manifest.import_targets(&specifier) {
                     if target.starts_with("./") {
@@ -107,6 +126,84 @@ fn reachable_files_inner(
     Ok(seen)
 }
 
+/// Return browser-field replacements for a reference from a reached file. Keys
+/// beginning with `./` are package-root paths, unlike source imports.
+pub fn browser_replacements(
+    manifest: &Manifest,
+    root: &Path,
+    parent: &Path,
+    specifier: &str,
+) -> Vec<String> {
+    let Some(map) = manifest.browser.as_object() else {
+        return Vec::new();
+    };
+    let source = specifier.starts_with('.').then(|| resolve_relative(parent, specifier)).flatten();
+    map.iter()
+        .filter_map(|(key, value)| {
+            let matches = if key.starts_with("./") {
+                source
+                    .as_ref()
+                    .is_some_and(|file| resolve_relative(root, key).as_ref() == Some(file))
+            } else {
+                key == specifier
+            };
+            matches.then(|| value.as_str().map(str::to_string)).flatten()
+        })
+        .collect()
+}
+
+/// Resolve stylesheet references relative to their source. Sass may omit an
+/// extension, use an underscore partial, or refer to a directory index.
+pub fn resolve_style(from: &Path, specifier: &str, kind: crate::style::StyleKind) -> Vec<PathBuf> {
+    if specifier.starts_with("pkg:") || specifier.starts_with('~') {
+        return Vec::new();
+    }
+    let base = from.join(specifier);
+    if kind == crate::style::StyleKind::Import {
+        let mut import_only = BTreeSet::new();
+        if let Some(name) = base.file_name().and_then(|name| name.to_str()) {
+            let explicit = base.extension().and_then(|extension| extension.to_str());
+            for extension in ["scss", "sass"] {
+                if explicit.is_some_and(|existing| existing != extension) {
+                    continue;
+                }
+                let stem = explicit
+                    .and_then(|_| name.strip_suffix(&format!(".{extension}")))
+                    .unwrap_or(name);
+                for candidate in
+                    [format!("{stem}.import.{extension}"), format!("_{stem}.import.{extension}")]
+                {
+                    if let Some(file) = existing_file(&base.with_file_name(candidate)) {
+                        import_only.insert(file);
+                    }
+                }
+            }
+        }
+        if !import_only.is_empty() {
+            return import_only.into_iter().collect();
+        }
+    }
+    let mut paths = BTreeSet::new();
+    let mut add = |path: &Path| {
+        if let Some(file) = existing_file(path) {
+            paths.insert(file);
+        }
+    };
+    add(&base);
+    if let Some(name) = base.file_name().and_then(|name| name.to_str()) {
+        add(&base.with_file_name(format!("_{name}")));
+        for extension in ["scss", "sass", "css", "less"] {
+            add(&append(&base, &format!(".{extension}")));
+            add(&base.with_file_name(format!("_{name}.{extension}")));
+        }
+    }
+    for extension in ["scss", "sass", "css", "less"] {
+        add(&base.join(format!("index.{extension}")));
+        add(&base.join(format!("_index.{extension}")));
+    }
+    paths.into_iter().collect()
+}
+
 fn entry_files(package_dir: &Path, manifest: &Manifest) -> Vec<PathBuf> {
     let mut entries: Vec<PathBuf> = manifest
         .entry_paths()
@@ -127,6 +224,20 @@ fn entry_files(package_dir: &Path, manifest: &Manifest) -> Vec<PathBuf> {
     // an unexported `index.js` beside it is exactly what the map excludes.
     if !manifest.is_encapsulated() && (entries.is_empty() || manifest.main.is_null()) {
         entries.extend(resolve_relative(package_dir, "index"));
+    }
+    // Stylesheets are commonly published solely for subpath imports without a
+    // manifest entry. Without exports, all of those subpaths are public.
+    if !manifest.is_encapsulated() {
+        entries.extend(
+            WalkDir::new(package_dir)
+                .follow_links(false)
+                .into_iter()
+                .filter_entry(|entry| entry.file_name() != "node_modules")
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_file() && scan::is_stylesheet(entry.path()))
+                .filter_map(|entry| existing_file(entry.path()))
+                .filter(|path| path.starts_with(package_dir)),
+        );
     }
     entries
 }

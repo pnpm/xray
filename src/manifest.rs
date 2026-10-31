@@ -43,6 +43,12 @@ pub struct Manifest {
     #[serde(default)]
     pub typings: Value,
     #[serde(default)]
+    pub style: Value,
+    #[serde(default)]
+    pub sass: Value,
+    #[serde(default)]
+    pub less: Value,
+    #[serde(default)]
     pub types_versions: Value,
     #[serde(default)]
     pub bin: Value,
@@ -130,11 +136,23 @@ impl Manifest {
         } else if self.is_encapsulated() {
             add_paths(&self.exports, Some("."));
         } else {
-            for field in [&self.main, &self.module, &self.browser] {
+            for field in [&self.main, &self.module] {
                 add_paths(field, None);
             }
+            // An object maps imports, rather than declaring every target as an entry.
+            if self.browser.is_string() {
+                add_paths(&self.browser, None);
+            }
         }
-        for field in [&self.types, &self.typings, &self.bin, &self.types_versions] {
+        for field in [
+            &self.types,
+            &self.typings,
+            &self.bin,
+            &self.types_versions,
+            &self.style,
+            &self.sass,
+            &self.less,
+        ] {
             add_paths(field, None);
         }
         paths

@@ -193,7 +193,63 @@ process declaration. The older rc.3 has syntactically valid declarations but
 still failed the same type-checking probe due to Node type errors, so no version
 override is verified. The JavaScript files export many named values; deleting
 empty declaration statements would omit those API types and is not a verified
-repair. An upstream declaration rebuild or a reviewed package patch is needed.
+repair. At that point no safe package patch had been verified; the follow-up below tests a candidate.
 A broad Astro scan also encountered intentionally invalid test fixtures and an
 unfinished editor-history file; those warnings alone do not establish package
 runtime failures.
+
+## Sass package imports
+
+A separate pnpm global-store probe used `@material/button@14.0.0`, Vite 7.2.2,
+Sass 1.94.0, and `@material/base@14.0.0` and
+`@material/animation@14.0.0` as consumer dependencies, with hoisting disabled.
+The published `mdc-button.import.scss` forwards both packages but the button
+manifest declares neither. Building a Vite entry that imports a stylesheet with
+`@use "@material/button/mdc-button.import.scss";` failed to find
+`@material/base/mixins`. Adding only `@material/base` as a button dependency
+made the build fail next on `@material/animation/variables`. Adding both as
+version-scoped package-extension dependencies at `14.0.0` made the build
+succeed. The tarball is
+`https://registry.npmjs.org/@material/button/-/button-14.0.0.tgz`, integrity
+`sha512-dqqHaJq0peyXBZupFzCjmvScrfljyVU66ZCS3oldsaaj5iz8sn33I/45Z4zPzdR5F5z8ExToHkRcXhakj1UEAA==`.
+This specific probe is outside the four monorepo test suites above; it tests a
+published package, not a workspace source file.
+
+## Nuxt workspace
+
+At `nuxt/nuxt` commit `4036aa703ebc4001458082e50df749d45a199e57`, pnpm
+12.15.0 installed 68 projects with lifecycle scripts and hoisting disabled.
+Running the unit and renderer Vitest projects directly under Node in the local
+store yielded 224 passed files and three failures in one file; those assertions
+expected a different spelling of the package-manager install command. A global
+store reinstall succeeded and the Vitest symlink pointed into the global store.
+The same broad command then reported 32 failed tests, including many temporary
+project errors saying Nuxt could not be found. Re-running the representative
+`packages/kit/test/app-config.test.ts` alone passed all three tests under the
+global store. The broad run's additional failures were not traced to a published
+package; test interaction and the direct Node invocation remain possible factors.
+The attempt to exclude the known failing spec did not exclude it in this
+workspace's Vitest project configuration.
+
+A full-project `--fix --dry-run` reported an incomplete scan for the known
+malformed `unenv@2.0.0-rc.24` declarations and for a vendored jasmine stylesheet
+under `lz-string@1.5.0/tests`. The latter uses the legacy nonstandard IE
+`*zoom` CSS hack; it is a test fixture, not evidence of a broken application
+stylesheet. These two packages were excluded from the partial repair proposal.
+
+A later experiment regenerated the two broken `unenv@2.0.0-rc.24`
+declarations from the JavaScript shipped in the pinned tarball. TypeScript
+5.9.3 declaration emit with the publisher's `@types/node@22.14.1` generated
+files that passed a consumer check using typed default and named imports. A
+TypeScript checker comparison with runtime module namespaces found the same
+export names in each: 108 for process and 237 for constants. This is a reviewed
+patch candidate, not a general automatic fix: other Node type versions can
+still reveal unrelated incompatibilities in the package's internal declarations
+(`@types/node@24.19.2` failed its `Process` interface check). Runtime export
+comparison required a terminal because importing the process shim without one
+failed to initialize its TTY.
+
+After restricting repair scanning away from unrelated test fixtures, the Nuxt
+whole-workspace dry run no longer reported the vendored jasmine CSS hack. It
+still exited with an incomplete-scan diagnostic for the malformed unenv
+constants declaration and excluded that package from the partial proposal.

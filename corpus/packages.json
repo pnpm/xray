@@ -140,5 +140,52 @@
     ],
     "evidence": "Two shipped declaration files are rejected by the current parser. This case records incomplete analysis; it does not assert a repair.",
     "expectedIncomplete": true
+  },
+  {
+    "name": "@material/button",
+    "version": "14.0.0",
+    "url": "https://registry.npmjs.org/@material/button/-/button-14.0.0.tgz",
+    "sha512": "76aa87689ab4a5ec97059ba91730a39af49cadf963c9553ae99092de895db1a6a3e62cfcb27df723fe39678ccfcdd479179cfc1314e81e445c5e16a48f550400",
+    "expected": [
+      {
+        "dependency": "@material/base"
+      },
+      {
+        "dependency": "@material/animation"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The published mdc-button.import.scss forwards @material/base/mixins and @material/animation/variables but neither package is declared."
+  },
+  {
+    "name": "typed-array-byte-length",
+    "version": "1.0.3",
+    "url": "https://registry.npmjs.org/typed-array-byte-length/-/typed-array-byte-length-1.0.3.tgz",
+    "sha512": "05a5e03ae231cfc9fca48ab77bb02d83feecf83a6262bc67e2f768b77c3d29b9c185c450abaa37c5e9907487f29ea49e5de0eb177db1f96bdfce63a33e263d96",
+    "expected": [
+      {
+        "dependency": "available-typed-arrays",
+        "severity": "devDependency",
+        "origin": "runtime",
+        "declaredRange": "^1.0.7"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The published CommonJS entry requires available-typed-arrays, listed only in devDependencies. Candidate independently checked after finding it in the public nubjs package-extensions dataset."
+  },
+  {
+    "name": "@firebase/analytics-types",
+    "version": "0.8.5",
+    "url": "https://registry.npmjs.org/@firebase/analytics-types/-/analytics-types-0.8.5.tgz",
+    "sha512": "91d9e8a04ec18acda3127b2a71ead1c27fd44291f90f7baf1e992eece75433d4c9377a2696eea262d6f2010e97900251809b4ed1a35ff4e3a45bc27a0f9f6808",
+    "expected": [
+      {
+        "dependency": "@firebase/app-types",
+        "severity": "undeclared",
+        "origin": "types"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "Published index.d.ts imports @firebase/app-types but the manifest has no declaration or author-provided range. Candidate independently checked after finding it in the public nubjs package-extensions dataset."
   }
 ]

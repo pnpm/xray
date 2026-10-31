@@ -16,7 +16,15 @@ pub fn missing_package(
         // package that declares the module ambiently, the way `@types/estree`
         // declares `estree`. Executing code needs the package itself: a
         // declaration file carries no implementation.
-        Requirement::Module(specifier) => {
+        Requirement::Module(specifier) | Requirement::Style(specifier, _) => {
+            let specifier = if matches!(requirement, Requirement::Style(_, _)) {
+                specifier
+                    .strip_prefix("pkg:")
+                    .or_else(|| specifier.strip_prefix('~'))
+                    .unwrap_or(specifier)
+            } else {
+                specifier
+            };
             let name = package_name(specifier)?;
             let satisfied = declared.contains(name)
                 || (origin == Origin::Types && declared.contains(types_package(name).as_str()));

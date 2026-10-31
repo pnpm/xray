@@ -1,9 +1,10 @@
 use super::{exact_version, has_types, select};
-use crate::manifest::Manifest;
-use crate::report::{Evidence, Finding, Severity};
-use crate::{report::PackageReport, scan::Origin};
-use std::collections::BTreeSet;
-use std::path::PathBuf;
+use crate::{
+    manifest::Manifest,
+    report::{Evidence, Finding, PackageReport, Severity},
+    scan::Origin,
+};
+use std::{collections::BTreeSet, path::PathBuf};
 
 fn package(root: &std::path::Path, dir: &str, name: &str, version: &str) -> PathBuf {
     let path = root.join(dir);

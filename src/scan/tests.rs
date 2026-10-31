@@ -18,7 +18,9 @@ fn modules(source: &str) -> Vec<String> {
         .into_iter()
         .filter_map(|requirement| match requirement {
             Requirement::Module(specifier) => Some(specifier),
-            Requirement::TypesReference(_) | Requirement::PathReference(_) => None,
+            Requirement::TypesReference(_)
+            | Requirement::PathReference(_)
+            | Requirement::Style(_, _) => None,
         })
         .collect()
 }
@@ -71,6 +73,22 @@ fn reports_files_it_cannot_parse() {
 }
 
 #[test]
+fn recoverable_parser_diagnostics_are_not_reported_as_complete() {
+    for source in ["const x; require('dependency');", "export const = ;"] {
+        assert!(specifiers(source, Path::new("index.js")).is_err(), "{source}");
+    }
+}
+
+#[test]
+fn commonjs_top_level_return_still_exposes_imports() {
+    let source = "if (!globalThis.Feature) return; require('needed');";
+    for name in ["index.js", "index.cjs"] {
+        assert_eq!(script(source, name), ["needed"]);
+    }
+    assert!(specifiers(source, Path::new("index.mjs")).is_err());
+}
+
+#[test]
 fn reads_declaration_with_export_assignment_function_signature() {
     let source =
         "import type { T } from 'needed';\nexport =       function remapping(input: T): T;\n";
@@ -96,7 +114,7 @@ fn parses_flow_imports_and_tracks_original_utf8_positions() {
         let position = u32::try_from(source.find(&format!("'{specifier}'")).unwrap()).unwrap();
         assert!(
             found.contains(&(Requirement::Module(specifier.to_string()), origin, position)),
-            "{specifier}: {found:?}"
+            "{specifier}: {found:?}",
         );
     }
 }
@@ -111,6 +129,16 @@ fn recognizes_flow_pragmas_in_block_comments() {
             Origin::Types,
             u32::try_from(source.find("'typed'").unwrap()).unwrap()
         )));
+    }
+}
+
+#[test]
+fn flow_pragma_does_not_override_typescript_parser() {
+    let source = "// @flow\nimport type { A } from 'types';\nconst value = 1 satisfies number;";
+    for name in ["index.ts", "index.tsx"] {
+        assert!(
+            origins(source, name).contains(&(Requirement::Module("types".into()), Origin::Types)),
+        );
     }
 }
 
@@ -139,7 +167,9 @@ fn script(source: &str, name: &str) -> Vec<String> {
         .into_iter()
         .filter_map(|(requirement, _origin)| match requirement {
             Requirement::Module(specifier) => Some(specifier),
-            Requirement::TypesReference(_) | Requirement::PathReference(_) => None,
+            Requirement::TypesReference(_)
+            | Requirement::PathReference(_)
+            | Requirement::Style(_, _) => None,
         })
         .collect()
 }
@@ -152,6 +182,25 @@ fn collects_require_calls() {
         function lazy() { return require('lazy-require'); }
     ";
     assert_eq!(script(source, "index.js"), ["lazy-require", "plain-require", "resolved-require"]);
+}
+
+#[test]
+fn module_require_is_recognized_only_for_the_unshadowed_commonjs_binding() {
+    let source = "module.require('one'); module['require']('two'); function f(module) { module.require('hidden'); } const x = {require: () => {}}; x.require('ignored');";
+    assert_eq!(script(source, "index.cjs"), ["one", "two"]);
+    let references = crate::scan::references(source, Path::new("index.cjs")).unwrap();
+    let expected = (
+        Requirement::Module("one".into()),
+        Origin::Runtime,
+        u32::try_from(source.find("'one'").unwrap()).unwrap(),
+    );
+    assert!(references.contains(&expected));
+}
+
+#[test]
+fn flow_module_require_respects_lexical_shadowing() {
+    let source = "// @flow\nmodule.require('outer'); module['require']('computed'); function f(module) { module.require('hidden'); } class C { f(module) { module.require('class-hidden'); } }";
+    assert_eq!(script(source, "index.js"), ["computed", "outer"]);
 }
 
 #[test]
@@ -252,7 +301,9 @@ fn erased_positions_are_type_only_wherever_they_appear() {
         .into_iter()
         .filter_map(|(requirement, origin)| match requirement {
             Requirement::Module(specifier) => Some((specifier, origin)),
-            Requirement::TypesReference(_) | Requirement::PathReference(_) => None,
+            Requirement::TypesReference(_)
+            | Requirement::PathReference(_)
+            | Requirement::Style(_, _) => None,
         })
         .collect();
     assert_eq!(

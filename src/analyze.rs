@@ -4,7 +4,7 @@ mod tests;
 use crate::{
     classify::{missing_package, types_package},
     manifest::Manifest,
-    reachable::{reachable_files, reachable_files_for_repair},
+    reachable::{browser_replacements, reachable_files, reachable_files_for_repair, resolve_style},
     report::{Diagnostic, DiagnosticKind, Evidence, Finding, PackageReport, Severity},
     scan::{self, Origin},
 };
@@ -27,27 +27,8 @@ pub enum Scope {
     EveryFile,
 }
 
-/// What one installed package reaches for but never declared, or `None` when it
-/// declared everything its shipped files name.
 #[cfg(test)]
-pub fn analyze(package_dir: &Path, scope: Scope) -> Result<Option<PackageReport>> {
-    let outcome = analyze_with_diagnostics(package_dir, scope)?;
-    for diagnostic in &outcome.diagnostics {
-        if diagnostic.kind == DiagnosticKind::ReadError {
-            anyhow::bail!(
-                "reading source {}: {}",
-                package_dir.join(&diagnostic.file).display(),
-                diagnostic.message
-            );
-        }
-        eprintln!(
-            "warning: could not parse {}: {}",
-            package_dir.join(&diagnostic.file).display(),
-            diagnostic.message
-        );
-    }
-    Ok(outcome.report)
-}
+pub mod test_helpers;
 
 pub struct AnalysisOutcome {
     pub report: Option<PackageReport>,
@@ -113,8 +94,17 @@ fn analyze_inner(package_dir: &Path, scope: Scope, strict: bool) -> Result<Analy
                     let specifier = match &requirement {
                         scan::Requirement::Module(specifier)
                         | scan::Requirement::TypesReference(specifier)
-                        | scan::Requirement::PathReference(specifier) => specifier,
+                        | scan::Requirement::PathReference(specifier)
+                        | scan::Requirement::Style(specifier, _) => specifier,
                     };
+                    if let scan::Requirement::Style(_, kind) = &requirement {
+                        if resolve_style(file.parent().unwrap_or(package_dir), specifier, *kind)
+                            .iter()
+                            .any(|target| target.starts_with(&canonical_root))
+                        {
+                            continue;
+                        }
+                    }
                     let (line, column) = positions[&offset];
                     let evidence = Evidence {
                         file: filename.clone(),
@@ -123,15 +113,14 @@ fn analyze_inner(package_dir: &Path, scope: Scope, strict: bool) -> Result<Analy
                         specifier: specifier.clone(),
                         origin,
                     };
-                    let targets = if specifier.starts_with('#') {
-                        manifest
-                            .import_targets(specifier)
-                            .into_iter()
-                            .map(scan::Requirement::Module)
-                            .collect::<Vec<_>>()
-                    } else {
-                        vec![requirement]
-                    };
+                    let mut targets = import_targets(&manifest, &requirement, specifier);
+                    add_browser_targets(
+                        &mut targets,
+                        &manifest,
+                        &canonical_root,
+                        file.parent().unwrap_or(package_dir),
+                        origin,
+                    );
                     for target in &targets {
                         if let Some(mut name) = missing_package(target, origin, &declared) {
                             if origin == Origin::Types
@@ -162,6 +151,40 @@ fn analyze_inner(package_dir: &Path, scope: Scope, strict: bool) -> Result<Analy
 
     let report = build_report(&manifest, missing);
     Ok(AnalysisOutcome { report, diagnostics })
+}
+
+fn import_targets(
+    manifest: &Manifest,
+    requirement: &scan::Requirement,
+    specifier: &str,
+) -> Vec<scan::Requirement> {
+    if specifier.starts_with('#') {
+        manifest.import_targets(specifier).into_iter().map(scan::Requirement::Module).collect()
+    } else {
+        vec![requirement.clone()]
+    }
+}
+
+fn add_browser_targets(
+    targets: &mut Vec<scan::Requirement>,
+    manifest: &Manifest,
+    root: &Path,
+    parent: &Path,
+    origin: Origin,
+) {
+    if origin != Origin::Runtime {
+        return;
+    }
+    let replacements: Vec<scan::Requirement> = targets
+        .iter()
+        .filter_map(|target| match target {
+            scan::Requirement::Module(specifier) => Some(specifier),
+            _ => None,
+        })
+        .flat_map(|specifier| browser_replacements(manifest, root, parent, specifier))
+        .map(scan::Requirement::Module)
+        .collect();
+    targets.extend(replacements);
 }
 
 fn build_report(

@@ -60,7 +60,7 @@ fn triple_slash_paths_follow_declaration_files_and_stop_at_package_boundary() {
         crate::analyze::analyze_for_repair(&dir, crate::analyze::Scope::Declared).unwrap().unwrap();
     assert_eq!(
         report.findings.iter().map(|finding| finding.dependency.as_str()).collect::<Vec<_>>(),
-        ["missing-a", "missing-b"]
+        ["missing-a", "missing-b"],
     );
     assert_eq!(report.findings[0].evidence.first().unwrap().file, "types/a.d.ts");
 }
@@ -151,7 +151,9 @@ fn export_patterns_include_nested_matching_files() {
     write(&dir.join("dist/ignored.ts"), "import 'not-exported';");
     write(&dir.join("node_modules/bundled/dist/third.js"), "require('not-ours');");
     assert_eq!(names(&dir), ["dist/first.js", "dist/nested/second.js"]);
-    let report = crate::analyze::analyze(&dir, crate::analyze::Scope::Declared).unwrap().unwrap();
+    let report = crate::analyze::test_helpers::analyze(&dir, crate::analyze::Scope::Declared)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         report.findings.iter().map(|f| f.dependency.as_str()).collect::<Vec<_>>(),
         ["missing-one", "missing-two"],

@@ -37,12 +37,17 @@ package manager installs only if it matches the machine.
 
 ## Usage
 
-Scan everything installed in a project:
+Scan the dependency packages installed in a project:
 
 ```sh
 xray
 xray /path/to/project
 ```
+
+Project scans traverse workspace links to find dependencies, but skip authored
+workspace packages. When invoked from a member, repairs use the nearest workspace
+settings file rather than creating a nested workspace. Scan authored packages
+explicitly if needed:
 
 Scan a single package directory:
 
@@ -54,12 +59,14 @@ Output the findings as JSON:
 
 ```sh
 xray --json
+xray --check --json
 ```
 
 JSON uses a versioned envelope with `packages`, structured `diagnostics`,
 `packagesScanned`, and `complete`. A scan with parse or read diagnostics exits 2
 and sets `complete: false`, even when no dependency findings were produced.
-A complete scan exits 0; other command/configuration errors exit 1. Trace mode
+A complete scan exits 0; `--check` makes it exit 1 when findings remain. Other
+command/configuration errors exit 1. Trace mode
 preserves the traced command's exit code instead.
 
 ## Observe computed imports
@@ -102,7 +109,8 @@ pnpm install
 `--fix` merges version-specific extensions into `pnpm-workspace.yaml`, preserving
 comments, unrelated settings and existing extensions. Conflicting settings are
 reported without writing the file. Running it twice does not duplicate entries.
-It scans declared entry points and their imports, including declarations; use
+It scans declared entry points and their imports, including declarations and
+public stylesheet subpaths of packages without exports maps; use
 `--fix --all-files` for deep imports outside that graph. A parse failure in that
 surface excludes that entire package from repair and makes xray exit with code 2.
 Independent packages can still be repaired; excluded packages are listed on stderr.
@@ -144,6 +152,29 @@ When no portable range is available, the output uses an optional peer with range
 `'*'`. This links a dependency only when it is already available; it does not
 install one. Those suggestions require review and a suitable version supplied by
 the consumer.
+
+## Repair malformed declarations
+
+When a published declaration is syntactically broken and matching JavaScript is
+shipped, try a compiler-verified pnpm patch:
+
+```sh
+xray --fix --regenerate-types --dry-run
+xray --fix --regenerate-types
+pnpm install
+```
+
+This requires a local TypeScript installation and `tsconfig.json` in the target
+project. Xray emits declarations from the shipped JavaScript without executing
+it, checks that exported names match, and verifies the project in memory with
+all declaration checking enabled. A candidate is rejected if any diagnostics
+remain; the reason is printed. Source files in the package store are untouched.
+
+Verified changes are saved as reviewable files under `patches/` and referenced
+by `patchedDependencies`. An initial incomplete scan still exits 2 until the
+patch is installed. Regeneration is intentionally opt-in: it cannot infer a
+correct declaration from every broken package or reconcile every compiler and
+type-provider version.
 
 ## What it reports
 
@@ -189,6 +220,13 @@ runtime, has no entry for most of them.
 Parsing rather than pattern matching is what keeps the results honest — a
 specifier mentioned in a JSDoc example is not a dependency, and a scanner built
 on regular expressions cannot tell the difference.
+
+Stylesheet dependencies count too: CSS, SCSS, Sass and Less `@import`, `@use` and
+`@forward` rules are parsed with [raffia](https://github.com/g-plane/raffia).
+Local Sass partials, index files and import-only files are followed before a bare
+name is treated as an external package. Builtin `sass:` modules, remote URLs and
+interpolated paths are excluded. Bare CSS names can also be browser-relative
+URLs, so automatic repairs require an installed provider.
 
 A specifier is not reported when nothing has to be installed for it to resolve:
 relative paths, subpath imports, protocol URLs and Node builtins. A

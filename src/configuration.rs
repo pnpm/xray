@@ -2,8 +2,23 @@
 use crate::{classify::types_package, report::PackageReport, scan::Origin};
 use anyhow::{bail, Context, Result};
 use node_semver::{Range, Version};
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 use yaml_rust2::{Yaml, YamlLoader};
+
+/// Resolve the settings destination when invoked from a workspace member.
+pub fn workspace_root(project: &Path) -> Result<PathBuf> {
+    let project =
+        project.canonicalize().with_context(|| format!("resolving {}", project.display()))?;
+    for parent in project.ancestors() {
+        if parent.join("pnpm-workspace.yaml").is_file() {
+            return Ok(parent.to_path_buf());
+        }
+    }
+    Ok(project)
+}
 
 pub fn apply(project: &Path, reports: &mut Vec<PackageReport>) -> Result<()> {
     let path = project.join("pnpm-workspace.yaml");

@@ -29,13 +29,43 @@ pub fn merge(existing: &str, proposed: &str) -> Result<String> {
     let proposals = Document::from_str(proposed).context("reading generated extensions")?;
     let additions = proposals.as_mapping().context("generated extensions must be a mapping")?;
     merge_mapping(&root, &additions, "")?;
+    let proposed_documents = YamlLoader::load_from_str(proposed)?;
+    if proposed_documents.len() != 1 {
+        bail!("generated extensions must contain one document");
+    }
+    let mut expected = before
+        .first()
+        .filter(|value| !matches!(value, Yaml::Null))
+        .cloned()
+        .unwrap_or_else(|| Yaml::Hash(yaml_rust2::yaml::Hash::new()));
+    merge_values(&mut expected, &proposed_documents[0])?;
     let result = document.to_string();
     let parsed =
         YamlLoader::load_from_str(&result).context("validating merged workspace settings")?;
     if parsed.len() != 1 || parsed[0].as_hash().is_none() {
         bail!("merged workspace settings must be a single YAML mapping");
     }
+    if parsed[0] != expected {
+        bail!("workspace edit did not preserve the original settings and proposed repairs");
+    }
     Ok(result)
+}
+
+fn merge_values(target: &mut Yaml, additions: &Yaml) -> Result<()> {
+    match (target, additions) {
+        (Yaml::Hash(target), Yaml::Hash(additions)) => {
+            for (key, value) in additions {
+                if let Some(existing) = target.get_mut(key) {
+                    merge_values(existing, value)?;
+                } else {
+                    target.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        (existing, proposed) if existing != proposed => bail!("conflicting workspace setting"),
+        _ => {}
+    }
+    Ok(())
 }
 
 fn merge_mapping(target: &Mapping, additions: &Mapping, parent: &str) -> Result<()> {

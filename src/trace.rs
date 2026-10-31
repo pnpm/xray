@@ -109,7 +109,7 @@ fn reports_from_events(
                 "{}: {} ({})",
                 event.code,
                 event.specifier,
-                event.message.lines().next().unwrap_or("")
+                event.message.lines().next().unwrap_or(""),
             );
             let diagnostic = Diagnostic {
                 package: manifest.id(),
