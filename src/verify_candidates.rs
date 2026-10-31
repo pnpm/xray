@@ -92,20 +92,18 @@ pub fn collect(
                 };
             let key = format!("extension:{}:{}", report.package, finding.dependency);
             let single = PackageReport { package: report.package.clone(), findings: vec![finding] };
-            ranked.push((
-                priority,
-                Candidate {
-                    key,
-                    configuration: report::as_package_extensions(&[single]),
-                    artifacts: BTreeMap::new(),
-                },
-            ));
+            let configuration = report::as_package_extensions(&[single]);
+            if has_extensions(&configuration) {
+                ranked
+                    .push((priority, Candidate { key, configuration, artifacts: BTreeMap::new() }));
+            }
         }
     }
     for candidate in verify_types::collect(project, installed_packages)? {
-        if !incomplete
-            .iter()
-            .any(|package| candidate.key.starts_with(&format!("extension:{package}:")))
+        if has_extensions(&candidate.configuration)
+            && !incomplete
+                .iter()
+                .any(|package| candidate.key.starts_with(&format!("extension:{package}:")))
         {
             ranked.push((1, candidate));
         }
@@ -131,6 +129,18 @@ pub fn collect(
         }
     }
     Ok(candidates)
+}
+
+/// A proposal that would write no package extension (for example for a
+/// package whose version cannot be keyed) cannot change the result, so it
+/// must not spend a verification attempt.
+fn has_extensions(configuration: &str) -> bool {
+    yaml_rust2::YamlLoader::load_from_str(configuration).is_ok_and(|documents| {
+        documents
+            .first()
+            .and_then(|document| document["packageExtensions"].as_hash())
+            .is_some_and(|extensions| !extensions.is_empty())
+    })
 }
 
 /// Combine proposals using the same conflict checks as normal workspace edits.

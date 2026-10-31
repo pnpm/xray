@@ -1,4 +1,14 @@
-use super::{collect, compose, Candidate};
+use super::{collect, compose, has_extensions, Candidate};
+
+#[test]
+fn proposals_without_extension_entries_are_not_candidates() {
+    assert!(!has_extensions(""));
+    assert!(!has_extensions("packageExtensions:\n"));
+    assert!(!has_extensions("packageExtensions: {}\n"));
+    assert!(has_extensions(
+        "packageExtensions:\n  'example@1.0.0':\n    dependencies:\n      dep: '*'\n"
+    ));
+}
 use crate::{
     analyze::Scope,
     report::{Finding, PackageReport, Severity},
