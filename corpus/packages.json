@@ -216,5 +216,52 @@
     "maxFindings": 0,
     "maxDiagnosticLines": 0,
     "evidence": "The browser map names emitter-component for an unused emitter specifier; its actual require is component-emitter, which is declared."
+  },
+  {
+    "name": "@eslint-community/eslint-utils",
+    "version": "4.10.1",
+    "url": "https://registry.npmjs.org/@eslint-community/eslint-utils/-/eslint-utils-4.10.1.tgz",
+    "sha512": "72e69d73154513cb032ba89625bb3c4a7d1abf636b8764121908559415bd01a007a87c235ac6474fc2c9e211463e1ec048157675e15d33b1ff0cf8ee96687cae",
+    "expected": [
+      {
+        "dependency": "@types/estree",
+        "origin": "types",
+        "severity": "devDependency",
+        "declaredRange": "^1.0.8"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The published declaration imports estree while @types/estree is only a devDependency. Independently validated as a Vite workspace discovery candidate."
+  },
+  {
+    "name": "@humanfs/node",
+    "version": "0.16.6",
+    "url": "https://registry.npmjs.org/@humanfs/node/-/node-0.16.6.tgz",
+    "sha512": "62e23664740befc4391db8438810355f82e661d5c228231021fc34a70ee9887270c9110579b254beb40de1c32cb32112eb1faf7d46f1d4222969050a61d4193b",
+    "expected": [
+      {
+        "dependency": "@humanfs/types",
+        "origin": "types",
+        "severity": "devDependency",
+        "declaredRange": "^0.15.0"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "Published dist/node-hfs.d.ts refers to @humanfs/types, which is listed only as a devDependency. Independently validated as a Vue workspace discovery candidate."
+  },
+  {
+    "name": "@globalart/ddd",
+    "version": "4.3.0",
+    "url": "https://registry.npmjs.org/@globalart/ddd/-/ddd-4.3.0.tgz",
+    "sha512": "1602f4ea0e8246ecc91f9edd4dfc314e5b1c842a31a1be43b949a568bedb23db9d623171013504a4b56a29771747c7844928780df3003563caf385def3abc5d0",
+    "expected": [
+      {
+        "dependency": "date-fns",
+        "severity": "undeclared",
+        "origin": "runtime"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "Published CommonJS and ESM entrypoints import date-fns, absent from the manifest. Identified from the public nubjs package-extensions dataset and independently tested."
   }
 ]

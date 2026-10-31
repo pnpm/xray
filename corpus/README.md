@@ -57,7 +57,7 @@ cargo build
 node corpus/install-test.mjs
 ```
 
-The integration test covers ten known broken releases; it does not establish that
+The integration test covers thirteen known broken releases; it does not establish that
 all generated fixes are safe or that every registry package has been checked.
 
 ## CLI safety checks
@@ -70,3 +70,57 @@ synthetic packages. These checks do not fetch or execute registry code.
 Some candidates were discovered using the public [nubjs package-extensions
 dataset](https://github.com/nubjs/package-extensions). Their tarballs and failure
 conditions were independently verified here; the rest of that dataset was not.
+
+## Discovering candidates from an installed workspace
+
+`discover.mjs` scans an existing project, checks package names and exact versions
+against public npm registry metadata, and prints a ranked **unverified** candidate
+list as JSON. It does not install packages, run package scripts, fetch tarballs,
+or add cases to the verified corpus. The registry requests use at most four
+concurrent requests, have timeouts, and reject redirects. Local workspace package
+names and absolute or escaping evidence paths are excluded from output.
+
+```sh
+cargo build --release
+node corpus/discover.mjs /path/to/installed/project target/release/xray > candidates.json
+node --test corpus/discover.test.mjs
+```
+
+The envelope includes scan completeness and a diagnostic count, but omits local
+scanner diagnostic paths. Each candidate contains a registry tarball URL and
+SHA-512 digest from metadata, not a verified archive: download and hash the
+archive, examine the published manifest and relevant file, reproduce the
+failure, and verify any proposed repair before promoting it to `packages.json`.
+Static findings can describe optional integrations, bundled references or tests;
+a registry match does not prove an installed copy has the published contents.
+A failed metadata request omits that candidate, so the count is not an
+exhaustive measure of the project or npm.
+
+## Checking discovered type candidates
+
+The opt-in verifier tries up to five eligible candidates by default, sequentially,
+in temporary Linux pnpm projects. It requires Node, pnpm and a built xray binary.
+It installs with lifecycle scripts disabled and existing pnpm policies in force;
+it does not execute the candidate's JavaScript. Only simple publisher-declared
+type dependency ranges are eligible. It installs TypeScript 5.9.3 and
+`@types/node` 22.14.1 as the test consumer's tooling, with hoisting disabled and
+the global virtual store enabled.
+
+```sh
+node corpus/verify-candidates.mjs candidates.json --xray target/release/xray --limit 5 > verification.json
+node --test corpus/verify-candidates.test.mjs
+```
+
+`--limit` accepts 1–25. For each case, the verifier checks for the selected
+missing-module diagnostic, runs xray's repair, reinstalls with scripts disabled,
+then requires both a clean typecheck and a complete scan without that finding.
+It reports `confirmed`, `skipped`, or `blocked`, with diagnostic codes but no
+local paths or raw install logs. A `confirmed` result is evidence for that
+specific generated consumer and toolchain, not a guarantee for all consumers.
+Before installation, the verifier downloads the target archive from the public
+registry, rejects redirects and files larger than 64 MiB, verifies its SHA-512
+against the registry pin, and installs that local archive. It verifies the
+installed target identity and that its real path is outside the project. Output
+marks that archive `sha512_verified`; provider pins remain metadata-only.
+Independently review the case and provider before adding it to the verified
+corpus. The verifier never edits `packages.json`.

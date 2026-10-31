@@ -34,6 +34,8 @@ pnpm add -D @pnpm/xray
 The binary is prebuilt. `@pnpm/xray` carries no code of its own beyond a
 launcher — the executable travels in a `@pnpm/xray.<platform>` package that your
 package manager installs only if it matches the machine.
+The GNU/Linux binaries target glibc 2.28 or newer; separate musl binaries are
+provided for musl-based distributions.
 
 ## Usage
 
@@ -115,10 +117,11 @@ public stylesheet subpaths of packages without exports maps; use
 surface excludes that entire package from repair and makes xray exit with code 2.
 Independent packages can still be repaired; excluded packages are listed on stderr.
 
-The planner uses portable author development ranges for missing type dependencies.
-It links existing runtime providers as optional peers, leaving unused integrations
-uninstalled. Type-only imports can be satisfied by an installed `@types` package;
-when its version is unambiguous, the repair installs that exact type package.
+The planner reuses installed providers as optional peers, including type providers,
+so a publisher's historical development range does not pull in an incompatible
+second type tree. For absent type dependencies it uses portable author development
+ranges. An untyped package's imports can be satisfied by an installed `@types`
+package; when its version is unambiguous, the repair selects that exact type package.
 Findings without a selected repair remain visible in the scan output.
 
 Print the selected block instead of applying it:

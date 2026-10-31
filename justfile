@@ -9,7 +9,8 @@ check:
 
 test:
   cargo test --locked
-  node --test npm/xray/test/*.test.mjs
+  node --test npm/xray/test/*.test.mjs scripts/test/*.test.mjs
+  node --test corpus/*.test.mjs
 
 lint:
   cargo clippy --locked --all-targets -- --deny warnings

@@ -58,8 +58,23 @@ jobs:
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
         key: ${{ matrix.target }}
-    - name: Build
+    # Pin both the linker and its binary archive. A versioned target stops the
+    # runner's newer glibc from becoming the minimum supported glibc.
+    - name: Install cargo-zigbuild
+      if: endsWith(matrix.target, '-linux-gnu')
+      run: cargo install --locked cargo-zigbuild --version '=0.24.0'
+    - name: Install Zig
+      if: endsWith(matrix.target, '-linux-gnu')
+      run: scripts/install-release-zig.sh
+    - name: Build GNU Linux for glibc 2.28
+      if: endsWith(matrix.target, '-linux-gnu')
+      run: cargo zigbuild --locked --release --target ${{ matrix.target }}.2.28
+    - name: Build other targets
+      if: ${{ !endsWith(matrix.target, '-linux-gnu') }}
       run: cargo build --locked --release --target ${{ matrix.target }}
+    - name: Verify GNU Linux ABI and smoke test
+      if: endsWith(matrix.target, '-linux-gnu')
+      run: scripts/check-gnu-abi.sh target/${{ matrix.target }}/release/xray
     # The artifact is named for the package it will end up in, so the publish
     # job can lay the packages out without knowing about Rust triples.
     - name: Stage the executable under its package target name
