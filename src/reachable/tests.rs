@@ -1,7 +1,7 @@
-#![cfg(unix)]
-
+#[cfg(unix)]
+use crate::fixtures::global_virtual_store;
 use crate::{
-    fixtures::{global_virtual_store, manifest, write},
+    fixtures::{manifest, write},
     manifest::Manifest,
     reachable::reachable_files,
 };
@@ -15,6 +15,7 @@ fn names(package_dir: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
+#[cfg(unix)]
 #[test]
 fn follows_relative_imports_out_of_the_entry_points() {
     let root = global_virtual_store();
@@ -79,6 +80,40 @@ fn typescript_source_entry_follows_reference_directives() {
     assert_eq!(report.findings[0].origin, crate::scan::Origin::Types);
     assert_eq!(report.findings[1].dependency, "runtime-missing");
     assert_eq!(report.findings[1].origin, crate::scan::Origin::Runtime);
+}
+
+#[test]
+fn esm_relative_urls_resolve_queries_fragments_and_percent_encoded_filenames() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","exports":"./index.mjs""#));
+    write(
+        &dir.join("index.mjs"),
+        "import './file%20name.mjs?feature#hash';\nimport './plain.mjs#fragment';\n",
+    );
+    write(&dir.join("file name.mjs"), "import 'hidden-missing';\nimport './index.mjs?cycle';\n");
+    write(&dir.join("plain.mjs"), "export const value = 1;\n");
+    let report =
+        crate::analyze::analyze_for_repair(&dir, crate::analyze::Scope::Declared).unwrap().unwrap();
+    assert_eq!(report.findings[0].dependency, "hidden-missing");
+    assert_eq!(report.findings[0].evidence.first().unwrap().file, "file name.mjs");
+    let output = std::process::Command::new("node").arg(dir.join("index.mjs")).output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("hidden-missing"));
+}
+
+#[test]
+fn cjs_literals_are_not_url_decoded_and_esm_cannot_escape_package() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(&dir.join("package.json"), &manifest("pkg", r#","exports":"./index.cjs""#));
+    write(&dir.join("index.cjs"), "require('./hidden.js?query'); import('../outside.mjs?query'); import('./nested%2Fchild.mjs');");
+    write(&dir.join("hidden.js"), "require('cjs-not-reached');");
+    write(&dir.join("nested/child.mjs"), "import 'encoded-separator-not-reached';");
+    write(&root.path().join("outside.mjs"), "import 'outside-not-reached';");
+    assert!(crate::analyze::analyze_for_repair(&dir, crate::analyze::Scope::Declared)
+        .unwrap()
+        .is_none());
 }
 
 #[test]

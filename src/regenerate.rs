@@ -60,8 +60,10 @@ pub fn propose(project: &Path, packages: &[PathBuf]) -> Result<RegenerationPropo
     }
     let temp = tempfile::tempdir()?;
     let bridge = temp.path().join("regenerate.cjs");
+    let path_helpers = temp.path().join("regenerate-paths.cjs");
     let list = temp.path().join("roots.json");
     std::fs::write(&bridge, include_str!("regenerate-bridge.cjs"))?;
+    std::fs::write(&path_helpers, include_str!("regenerate-paths.cjs"))?;
     std::fs::write(&list, serde_json::to_vec(&roots.keys().collect::<Vec<_>>())?)?;
     let output = Command::new("node")
         .arg(&bridge)

@@ -86,6 +86,13 @@ fn reachable_files_inner(
                     }
                     continue;
                 }
+                scan::Requirement::EsmRelative(specifier) => {
+                    match resolve_esm_relative(parent, &specifier) {
+                        Some(target) if target.starts_with(&root) => queue.push(target),
+                        _ => {}
+                    }
+                    continue;
+                }
                 scan::Requirement::Module(specifier) => specifier,
                 scan::Requirement::TypesReference(_) => continue,
             };
@@ -124,6 +131,29 @@ fn reachable_files_inner(
         }
     }
     Ok(seen)
+}
+
+fn resolve_esm_relative(from: &Path, specifier: &str) -> Option<PathBuf> {
+    if let Some(exact) = resolve_relative(from, specifier) {
+        return Some(exact);
+    }
+    let path = specifier.split(['?', '#']).next()?;
+    let mut decoded = Vec::with_capacity(path.len());
+    let mut bytes = path.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            let high = char::from(bytes.next()?).to_digit(16)?;
+            let low = char::from(bytes.next()?).to_digit(16)?;
+            let byte = u8::try_from(high * 16 + low).ok()?;
+            if matches!(byte, b'/' | b'\\' | 0) {
+                return None;
+            }
+            decoded.push(byte);
+        } else {
+            decoded.push(byte);
+        }
+    }
+    resolve_relative(from, std::str::from_utf8(&decoded).ok()?)
 }
 
 /// Return browser-field replacements for a reference from a reached file. Keys

@@ -191,3 +191,22 @@ fn separate_lockfile_workspaces_supply_direct_type_providers() {
     let providers = direct_types_providers(root.path()).unwrap();
     assert_eq!(providers["@types/estree"], BTreeSet::from(["1.0.8".into()]));
 }
+
+#[test]
+fn source_and_companion_type_surfaces_are_not_replaced_by_ambient_types() {
+    let root = tempfile::tempdir().unwrap();
+    for (index, extra, file) in [
+        (0, serde_json::json!({"main":"dist/main.mjs"}), "dist/main.d.mts"),
+        (1, serde_json::json!({"exports":"./source.ts"}), "source.ts"),
+        (2, serde_json::json!({"typesVersions":{"*":{"*":["types/*"]}}}), "types/index.d.ts"),
+    ] {
+        let path = root.path().join(index.to_string());
+        let file_path = path.join(file);
+        std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+        std::fs::write(file_path, "export {};").unwrap();
+        let mut manifest = serde_json::json!({"name":"typed","version":"1.0.0"});
+        manifest.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        std::fs::write(path.join("package.json"), manifest.to_string()).unwrap();
+        assert!(has_types(&Manifest::read(&path).unwrap(), &path));
+    }
+}

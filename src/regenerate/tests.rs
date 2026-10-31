@@ -1,6 +1,20 @@
 use super::{verified_patches, BridgeFile, BridgeResult};
 use std::collections::BTreeMap;
 
+#[test]
+fn node_path_helpers_normalize_windows_drive_and_unc_spellings() {
+    let helper = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/regenerate-paths.cjs");
+    let script = r"const assert = require('node:assert/strict');
+const paths = require(process.argv[1]);
+assert.equal(paths.normalize('\\\\?\\C:\\Users\\Test', true), 'C:\\Users\\Test');
+assert.equal(paths.normalize('\\\\?\\UNC\\server\\share\\file', true), '\\\\server\\share\\file');
+assert.equal(paths.key('C:/Users/Test', true), paths.key('\\\\?\\c:\\users\\test', true));
+assert.notEqual(paths.key('/tmp/Example', false), paths.key('/tmp/example', false));";
+    let output =
+        std::process::Command::new("node").arg("-e").arg(script).arg(helper).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
 fn item(root: &std::path::Path, name: &str, original: &str, replacement: &str) -> BridgeFile {
     let file = root.join(name);
     std::fs::write(&file, original).unwrap();

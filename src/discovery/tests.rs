@@ -98,3 +98,23 @@ fn discovers_member_dependencies_without_a_root_modules_directory() {
     std::fs::write(dependency.join("package.json"), "{}").unwrap();
     assert_eq!(installed_packages(root.path()).unwrap(), vec![dependency.canonicalize().unwrap()]);
 }
+
+#[test]
+fn hidden_tool_metadata_is_not_an_installed_package() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = root.path().join("node_modules/.cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join("package.json"), r#"{"type":"module"}"#).unwrap();
+    assert!(installed_packages(root.path()).unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn broken_package_links_cannot_produce_a_clean_scan() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("node_modules")).unwrap();
+    std::os::unix::fs::symlink(root.path().join("gone"), root.path().join("node_modules/missing"))
+        .unwrap();
+    let error = installed_packages(root.path()).unwrap_err().to_string();
+    assert!(error.contains("broken link"), "{error}");
+}

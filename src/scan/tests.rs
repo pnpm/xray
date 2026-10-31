@@ -20,6 +20,7 @@ fn modules(source: &str) -> Vec<String> {
             Requirement::Module(specifier) => Some(specifier),
             Requirement::TypesReference(_)
             | Requirement::PathReference(_)
+            | Requirement::EsmRelative(_)
             | Requirement::Style(_, _) => None,
         })
         .collect()
@@ -169,6 +170,7 @@ fn script(source: &str, name: &str) -> Vec<String> {
             Requirement::Module(specifier) => Some(specifier),
             Requirement::TypesReference(_)
             | Requirement::PathReference(_)
+            | Requirement::EsmRelative(_)
             | Requirement::Style(_, _) => None,
         })
         .collect()
@@ -303,6 +305,7 @@ fn erased_positions_are_type_only_wherever_they_appear() {
             Requirement::Module(specifier) => Some((specifier, origin)),
             Requirement::TypesReference(_)
             | Requirement::PathReference(_)
+            | Requirement::EsmRelative(_)
             | Requirement::Style(_, _) => None,
         })
         .collect();

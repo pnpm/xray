@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const binary = process.env.XRAY_XRAY_BINARY || join(repo, 'target', 'debug', process.platform === 'win32' ? 'xray.exe' : 'xray');
+const binary = process.env.XRAY_BINARY || join(repo, 'target', 'debug', process.platform === 'win32' ? 'xray.exe' : 'xray');
 const typescript = process.env.XRAY_TYPESCRIPT;
 if (!typescript) throw new Error('Set XRAY_TYPESCRIPT to a locally installed TypeScript 5.9.3 package directory');
 const manifest = JSON.parse(await readFile(join(typescript, 'package.json'), 'utf8'));

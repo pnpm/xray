@@ -62,9 +62,9 @@ function bindingContains(pattern, name) {
 function bind(current, pattern) {
   for (const name of ['require', 'module']) if (bindingContains(pattern, name)) current.bound.add(name);
 }
-function record(literal, origin) {
+function record(literal, origin, esm = false) {
   if (literal && literal.type === 'Literal' && typeof literal.value === 'string') {
-    found.push([literal.value, origin, literal.range[0]]);
+    found.push([literal.value, origin, literal.range[0], esm]);
   }
 }
 function isRequire(callee, current) {
@@ -79,9 +79,9 @@ function visit(node) {
   if (!node || typeof node !== 'object') return;
   if (Array.isArray(node)) { for (const item of node) visit(item); return; }
   switch (node.type) {
-    case 'ImportDeclaration': record(node.source, node.importKind === 'type' || node.importKind === 'typeof' ? 'types' : 'runtime'); break;
-    case 'ExportNamedDeclaration': case 'ExportAllDeclaration': record(node.source, node.exportKind === 'type' ? 'types' : 'runtime'); break;
-    case 'ImportExpression': record(node.source, 'runtime'); break;
+    case 'ImportDeclaration': record(node.source, node.importKind === 'type' || node.importKind === 'typeof' ? 'types' : 'runtime', true); break;
+    case 'ExportNamedDeclaration': case 'ExportAllDeclaration': record(node.source, node.exportKind === 'type' ? 'types' : 'runtime', true); break;
+    case 'ImportExpression': record(node.source, 'runtime', true); break;
     case 'CallExpression': if (isRequire(node.callee, scopes.get(node))) record(node.arguments[0], 'runtime'); break;
   }
   for (const [key, value] of Object.entries(node)) {

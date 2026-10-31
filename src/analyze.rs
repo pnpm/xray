@@ -93,6 +93,7 @@ fn analyze_inner(package_dir: &Path, scope: Scope, strict: bool) -> Result<Analy
                 for (requirement, origin, offset) in found {
                     let specifier = match &requirement {
                         scan::Requirement::Module(specifier)
+                        | scan::Requirement::EsmRelative(specifier)
                         | scan::Requirement::TypesReference(specifier)
                         | scan::Requirement::PathReference(specifier)
                         | scan::Requirement::Style(specifier, _) => specifier.as_str(),

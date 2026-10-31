@@ -3,8 +3,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createRequire } = require('node:module');
+const { normalize, key } = require('./regenerate-paths.cjs');
 
-const [project, rootsJson] = process.argv.slice(2);
+const [projectArg, rootsJson] = process.argv.slice(2);
+const project = normalize(fs.realpathSync(normalize(projectArg)));
+const real = file => { try { return normalize(fs.realpathSync(normalize(file))); } catch { return undefined; } };
+const samePath = (left, right) => left !== undefined && right !== undefined && key(left) === key(right);
 const localRequire = createRequire(path.join(project, '__xray_regenerate__.cjs'));
 const ts = localRequire('typescript');
 function finish(files, messages = []) { console.log(JSON.stringify({ compiler: ts.version, files, messages })); }
@@ -13,9 +17,9 @@ function reject(reason, diagnostics = []) {
   finish([], [reason, ...detail]);
   process.exit(0);
 }
-const roots = JSON.parse(fs.readFileSync(rootsJson, 'utf8')).map(p => fs.realpathSync(p)).sort((a, b) => b.split(path.sep).length - a.split(path.sep).length);
+const roots = JSON.parse(fs.readFileSync(rootsJson, 'utf8')).map(p => normalize(fs.realpathSync(normalize(p)))).sort((a, b) => b.split(path.sep).length - a.split(path.sep).length);
 const configPath = ts.findConfigFile(project, ts.sys.fileExists, 'tsconfig.json');
-if (!configPath || path.dirname(configPath) !== project) throw new Error('type regeneration requires a tsconfig.json in the target project');
+if (!configPath || !samePath(real(path.dirname(configPath)), project)) throw new Error('type regeneration requires a tsconfig.json in the target project');
 const read = ts.readConfigFile(configPath, ts.sys.readFile);
 if (read.error) throw new Error(ts.flattenDiagnosticMessageText(read.error.messageText, '\n'));
 const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, project, undefined, configPath);
@@ -29,7 +33,6 @@ const syntactic = original.getSyntacticDiagnostics();
 // TS1123 (empty variable declaration list) is reported by the semantic pass.
 const syntax = initial.filter(d => d.file && /\.d\.(?:ts|mts|cts)$/.test(d.file.fileName) &&
   (d.code === 1123 || syntactic.some(s => s.file === d.file && s.code === d.code && s.start === d.start))); 
-const real = file => { try { return fs.realpathSync(file); } catch { return undefined; } };
 const contained = (file, root) => { const p = path.relative(root, file); return p !== '' && !p.startsWith(`..${path.sep}`) && p !== '..' && !path.isAbsolute(p); };
 const candidates = new Map();
 for (const diagnostic of syntax) {
@@ -37,7 +40,7 @@ for (const diagnostic of syntax) {
   const root = declaration && roots.find(root => contained(declaration, root));
   if (!root) continue;
   const runtime = declaration.replace(/\.d\.(mts|cts|ts)$/, (_, ext) => ext === 'mts' ? '.mjs' : ext === 'cts' ? '.cjs' : '.js');
-  if (!fs.existsSync(runtime) || real(runtime) !== runtime) continue;
+  if (!fs.existsSync(runtime) || !samePath(real(runtime), runtime)) continue;
   candidates.set(declaration, { root, runtime });
 }
 if (!candidates.size || !initial.length) {
@@ -55,21 +58,21 @@ const jsChecker = emitProgram.getTypeChecker();
 const output = new Map();
 const emit = emitProgram.emit(undefined, (name, text, _bom, _onError, sourceFiles) => {
   if (!name.endsWith('.d.ts') && !name.endsWith('.d.mts') && !name.endsWith('.d.cts')) return;
-  if (sourceFiles?.length === 1) output.set(real(sourceFiles[0].fileName), text);
+  if (sourceFiles?.length === 1) output.set(key(real(sourceFiles[0].fileName)), text);
 }, undefined, true);
 if (emit.emitSkipped) reject('Declaration generation rejected: TypeScript skipped emit.', emit.diagnostics);
 for (const [declaration, { runtime }] of candidates) {
-  const replacement = output.get(runtime);
+  const replacement = output.get(key(runtime));
   if (!replacement) reject(`Declaration generation rejected: no declaration emitted for ${runtime}.`);
-  generated.set(declaration, replacement);
+  generated.set(key(declaration), replacement);
 }
 
 const host = ts.createCompilerHost(options);
 const originalRead = host.readFile.bind(host);
 const originalSource = host.getSourceFile.bind(host);
-host.readFile = file => generated.get(real(file)) ?? originalRead(file);
+host.readFile = file => generated.get(key(real(file))) ?? originalRead(file);
 host.getSourceFile = (file, languageVersion, onError, shouldCreateNewSourceFile) => {
-  const text = generated.get(real(file));
+  const text = generated.get(key(real(file)));
   return text === undefined ? originalSource(file, languageVersion, onError, shouldCreateNewSourceFile) :
     ts.createSourceFile(file, text, languageVersion, true, ts.getScriptKindFromFileName(file));
 };
@@ -85,8 +88,8 @@ const exportsOf = (checker, file) => {
 for (const [declaration, { runtime }] of candidates) {
   const source = emitProgram.getSourceFile(runtime);
   // Preserve the filename spelling used by the consumer's program, which may be symlinked.
-  const decl = fixed.getSourceFiles().find(file => real(file.fileName) === declaration);
-  const oldFile = original.getSourceFiles().find(file => real(file.fileName) === declaration);
+  const decl = fixed.getSourceFiles().find(file => samePath(real(file.fileName), declaration));
+  const oldFile = original.getSourceFiles().find(file => samePath(real(file.fileName), declaration));
   const oldSymbol = oldFile && originalChecker.getSymbolAtLocation(oldFile);
   const newSymbol = decl && fixedChecker.getSymbolAtLocation(decl);
   if (!oldSymbol || !newSymbol) reject(`Declaration generation rejected: cannot recover original exports for ${declaration}.`);
@@ -152,7 +155,7 @@ for (const [declaration, { runtime }] of candidates) {
   }
 }
 finish([...candidates].map(([file, value]) => ({
-  root: value.root, file, original: fs.readFileSync(file, 'utf8'), replacement: generated.get(file),
+  root: value.root, file, original: fs.readFileSync(file, 'utf8'), replacement: generated.get(key(file)),
 }))); 
 
 function diagnosticHost() { return { getCanonicalFileName: x => x, getCurrentDirectory: () => project, getNewLine: () => '\n' }; }

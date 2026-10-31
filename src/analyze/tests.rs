@@ -1,14 +1,10 @@
-#![cfg(unix)]
-
 use super::test_helpers::analyze;
+#[cfg(unix)]
+use crate::{analyze::scannable_files, fixtures::global_virtual_store, report::Severity};
 
-use crate::{
-    analyze::{scannable_files, Scope},
-    fixtures::global_virtual_store,
-    report::Severity,
-    scan::Origin,
-};
+use crate::{analyze::Scope, scan::Origin};
 
+#[cfg(unix)]
 #[test]
 fn reports_a_dev_dependency_that_leaks_into_declarations() {
     let root = global_virtual_store();
@@ -21,6 +17,7 @@ fn reports_a_dev_dependency_that_leaks_into_declarations() {
     assert_eq!(ghost.origin, Origin::Types);
 }
 
+#[cfg(unix)]
 #[test]
 fn reports_a_dependency_required_from_executable_code() {
     let root = global_virtual_store();
@@ -32,6 +29,7 @@ fn reports_a_dependency_required_from_executable_code() {
     assert_eq!(runtime.origin, Origin::Runtime);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_package_that_declares_what_it_imports_is_not_reported() {
     let root = global_virtual_store();
@@ -39,6 +37,7 @@ fn a_package_that_declares_what_it_imports_is_not_reported() {
     assert!(analyze(&helper, Scope::Declared).unwrap().is_none());
 }
 
+#[cfg(unix)]
 #[test]
 fn files_bundled_under_node_modules_are_not_the_package_own() {
     let root = global_virtual_store();
@@ -48,6 +47,7 @@ fn files_bundled_under_node_modules_are_not_the_package_own() {
     assert!(scanned.iter().all(|path| !path.to_string_lossy().contains("vendored")), "{scanned:?}");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_file_nothing_reaches_is_not_an_encapsulated_package_business() {
     let root = global_virtual_store();

@@ -137,8 +137,36 @@ fn has_types(manifest: &Manifest, path: &Path) -> bool {
     }
     manifest.types.is_string()
         || manifest.typings.is_string()
-        || path.join("index.d.ts").is_file()
+        || [
+            "index.d.ts",
+            "index.d.mts",
+            "index.d.cts",
+            "index.ts",
+            "index.mts",
+            "index.cts",
+            "index.tsx",
+        ]
+        .iter()
+        .any(|entry| path.join(entry).is_file())
+        || manifest.types_versions.as_object().is_some_and(|versions| !versions.is_empty())
         || has_declaration(&manifest.exports)
+        || manifest.entry_paths().iter().any(|entry| {
+            let target = path.join(&entry.path);
+            if matches!(
+                target.extension().and_then(|extension| extension.to_str()),
+                Some("ts" | "tsx" | "mts" | "cts"),
+            ) {
+                return true;
+            }
+            [(".js", ".d.ts"), (".mjs", ".d.mts"), (".cjs", ".d.cts")].iter().any(
+                |(extension, declaration)| {
+                    entry
+                        .path
+                        .strip_suffix(extension)
+                        .is_some_and(|stem| path.join(format!("{stem}{declaration}")).is_file())
+                },
+            )
+        })
 }
 
 // Do not turn a malformed or non-concrete manifest version into an install range.

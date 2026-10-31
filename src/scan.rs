@@ -163,17 +163,23 @@ fn flow_references(source: &str) -> Result<BTreeSet<(Requirement, Origin, u32)>,
             String::from_utf8_lossy(&output.stderr).trim(),
         ));
     }
-    let values: Vec<(String, String, u32)> = serde_json::from_slice(&output.stdout)
+    let values: Vec<(String, String, u32, bool)> = serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("reading Flow parser output: {error}"))?;
     values
         .into_iter()
-        .map(|(specifier, origin, offset)| {
+        .map(|(specifier, origin, offset, esm)| {
             let origin = match origin.as_str() {
                 "types" => Origin::Types,
                 "runtime" => Origin::Runtime,
                 _ => return Err(format!("unknown Flow reference origin {origin}")),
             };
-            Ok((Requirement::Module(specifier), origin, offset))
+            let requirement =
+                if esm && specifier.starts_with('.') && specifier.contains(['?', '#', '%']) {
+                    Requirement::EsmRelative(specifier)
+                } else {
+                    Requirement::Module(specifier)
+                };
+            Ok((requirement, origin, offset))
         })
         .collect()
 }
@@ -238,6 +244,8 @@ fn is_typescript(path: &Path) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Requirement {
     Module(String),
+    /// A relative ESM URL requiring query/fragment or percent decoding.
+    EsmRelative(String),
     TypesReference(String),
     /// A triple-slash path is relative to its containing file, even without `./`.
     PathReference(String),
@@ -339,36 +347,57 @@ impl Collector<'_> {
     fn record_type_only(&mut self, specifier: &str, offset: u32) {
         self.found.insert((Requirement::Module(specifier.to_string()), Origin::Types, offset));
     }
+
+    fn record_esm(&mut self, specifier: &str, offset: u32, origin: Origin) {
+        let requirement = if specifier.starts_with('.') && specifier.contains(['?', '#', '%']) {
+            Requirement::EsmRelative(specifier.to_string())
+        } else {
+            Requirement::Module(specifier.to_string())
+        };
+        self.found.insert((requirement, origin, offset));
+    }
 }
 
 impl<'a> Visit<'a> for Collector<'_> {
     fn visit_import_declaration(&mut self, decl: &ImportDeclaration<'a>) {
         if decl.import_kind.is_type() {
-            self.record_type_only(decl.source.value.as_str(), decl.source.span.start);
+            self.record_esm(decl.source.value.as_str(), decl.source.span.start, Origin::Types);
         } else {
-            self.record(decl.source.value.as_str(), decl.source.span.start);
+            self.record_esm(
+                decl.source.value.as_str(),
+                decl.source.span.start,
+                self.default_origin,
+            );
         }
     }
 
     fn visit_export_from_declaration(&mut self, decl: &ExportFromDeclaration<'a>) {
         if decl.export_kind.is_type() {
-            self.record_type_only(decl.source.value.as_str(), decl.source.span.start);
+            self.record_esm(decl.source.value.as_str(), decl.source.span.start, Origin::Types);
         } else {
-            self.record(decl.source.value.as_str(), decl.source.span.start);
+            self.record_esm(
+                decl.source.value.as_str(),
+                decl.source.span.start,
+                self.default_origin,
+            );
         }
     }
 
     fn visit_export_all_declaration(&mut self, decl: &ExportAllDeclaration<'a>) {
         if decl.export_kind.is_type() {
-            self.record_type_only(decl.source.value.as_str(), decl.source.span.start);
+            self.record_esm(decl.source.value.as_str(), decl.source.span.start, Origin::Types);
         } else {
-            self.record(decl.source.value.as_str(), decl.source.span.start);
+            self.record_esm(
+                decl.source.value.as_str(),
+                decl.source.span.start,
+                self.default_origin,
+            );
         }
     }
 
     fn visit_import_expression(&mut self, expr: &ImportExpression<'a>) {
         if let Expression::StringLiteral(literal) = &expr.source {
-            self.record(literal.value.as_str(), literal.span.start);
+            self.record_esm(literal.value.as_str(), literal.span.start, self.default_origin);
         }
         walk::walk_import_expression(self, expr);
     }
