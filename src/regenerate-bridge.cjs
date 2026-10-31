@@ -3,11 +3,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createRequire } = require('node:module');
-const { normalize, key } = require('./regenerate-paths.cjs');
+const { normalize, key, canonical } = require('./regenerate-paths.cjs');
 
 const [projectArg, rootsJson] = process.argv.slice(2);
-const project = normalize(fs.realpathSync(normalize(projectArg)));
-const real = file => { try { return normalize(fs.realpathSync(normalize(file))); } catch { return undefined; } };
+const project = canonical(projectArg);
+const real = file => { try { return canonical(file); } catch { return undefined; } };
 const samePath = (left, right) => left !== undefined && right !== undefined && key(left) === key(right);
 const localRequire = createRequire(path.join(project, '__xray_regenerate__.cjs'));
 const ts = localRequire('typescript');
@@ -17,7 +17,7 @@ function reject(reason, diagnostics = []) {
   finish([], [reason, ...detail]);
   process.exit(0);
 }
-const roots = JSON.parse(fs.readFileSync(rootsJson, 'utf8')).map(p => normalize(fs.realpathSync(normalize(p)))).sort((a, b) => b.split(path.sep).length - a.split(path.sep).length);
+const roots = JSON.parse(fs.readFileSync(rootsJson, 'utf8')).map(p => canonical(p)).sort((a, b) => b.split(path.sep).length - a.split(path.sep).length);
 const configPath = ts.findConfigFile(project, ts.sys.fileExists, 'tsconfig.json');
 if (!configPath || !samePath(real(path.dirname(configPath)), project)) throw new Error('type regeneration requires a tsconfig.json in the target project');
 const read = ts.readConfigFile(configPath, ts.sys.readFile);
@@ -41,7 +41,6 @@ for (const diagnostic of syntax) {
   if (!declaration) { skipped.missingDeclaration++; continue; }
   const root = roots.find(root => contained(declaration, root));
   if (!root) {
-    if (process.env.XRAY_DEBUG_REGEN === '1') console.error('REGEN_DEBUG', JSON.stringify({ declaration, roots, relative: roots.map(root => path.relative(root, declaration)) }));
     skipped.outsideRoots++; continue;
   }
   const runtime = declaration.replace(/\.d\.(mts|cts|ts)$/, (_, ext) => ext === 'mts' ? '.mjs' : ext === 'cts' ? '.cjs' : '.js');

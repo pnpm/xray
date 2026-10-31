@@ -33,7 +33,6 @@ async function fixture(declaration, consumer, options = {}) {
 
 function invoke({ root, roots }) {
   const result = spawnSync(process.execPath, [bridge, root, roots], { cwd: root, encoding: 'utf8', timeout: 30_000, maxBuffer: 8 * 1024 * 1024 })
-  if (process.env.XRAY_DEBUG_REGEN === '1' && result.stderr) process.stderr.write(result.stderr)
   assert.equal(result.status, 0, result.stderr)
   return JSON.parse(result.stdout)
 }
