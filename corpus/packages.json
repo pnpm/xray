@@ -187,5 +187,34 @@
     ],
     "maxDiagnosticLines": 0,
     "evidence": "Published index.d.ts imports @firebase/app-types but the manifest has no declaration or author-provided range. Candidate independently checked after finding it in the public nubjs package-extensions dataset."
+  },
+  {
+    "name": "coinstring",
+    "version": "2.0.0",
+    "url": "https://registry.npmjs.org/coinstring/-/coinstring-2.0.0.tgz",
+    "sha512": "6686e6cee99938880d5ff6627a31d9415cc46ec5f3df4c4b2119136d9396f14adc826de258664f4ac2eadbb37bfcb136fb4fd488547e4c86ea5f91d124b57a9f",
+    "expected": [
+      {
+        "dependency": "crypto-browserify",
+        "origin": "runtime",
+        "severity": "devDependency",
+        "declaredRange": "^2.1.8"
+      }
+    ],
+    "maxDiagnosticLines": 0,
+    "evidence": "The browser map replaces the used crypto builtin with crypto-browserify, which is only a devDependency."
+  },
+  {
+    "name": "stream",
+    "version": "0.0.3",
+    "url": "https://registry.npmjs.org/stream/-/stream-0.0.3.tgz",
+    "sha512": "68cb1b9fb54aae5e00d93ed001041bce037b35573bd2f805e48350ac15ea9f87425cdd73cb72fd1c680b3b9b3b3c4c6676bcd327cb91ff6edabe25bca2bf3ff8",
+    "expected": [],
+    "notExpected": [
+      "emitter-component"
+    ],
+    "maxFindings": 0,
+    "maxDiagnosticLines": 0,
+    "evidence": "The browser map names emitter-component for an unused emitter specifier; its actual require is component-emitter, which is declared."
   }
 ]

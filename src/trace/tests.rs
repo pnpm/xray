@@ -1,5 +1,30 @@
-use super::{reports_from_events, run};
+use super::{file_url_for_platform, reports_from_events, run};
 use std::process::Command;
+
+#[test]
+fn file_urls_support_windows_drive_verbatim_unc_and_escape_special_characters() {
+    assert_eq!(
+        file_url_for_platform(r"C:\Temp\file #1.mjs", true).unwrap(),
+        "file:///C:/Temp/file%20%231.mjs",
+    );
+    assert_eq!(
+        file_url_for_platform(r"\\?\C:\Temp\hook.mjs", true).unwrap(),
+        "file:///C:/Temp/hook.mjs",
+    );
+    assert_eq!(
+        file_url_for_platform(r"\\server\share\hook.mjs", true).unwrap(),
+        "file://server/share/hook.mjs",
+    );
+    assert_eq!(
+        file_url_for_platform(r"\\?\UNC\server\share\hook.mjs", true).unwrap(),
+        "file://server/share/hook.mjs",
+    );
+    assert_eq!(
+        file_url_for_platform("/tmp/é?#.mjs", false).unwrap(),
+        "file:///tmp/%C3%A9%3F%23.mjs",
+    );
+    assert!(file_url_for_platform("relative/hook.mjs", true).is_err());
+}
 
 #[test]
 fn observes_caught_dynamic_resolution_failures_from_installed_packages() {

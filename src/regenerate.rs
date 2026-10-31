@@ -89,14 +89,34 @@ fn verified_patches(
     let mut patches: BTreeMap<String, Vec<DeclarationFile>> = BTreeMap::new();
     let mut seen = BTreeSet::new();
     for file in result.files {
-        let Some(package) = roots.get(&file.root) else {
+        let canonical_root = file.root.canonicalize()?;
+        let Some(package) = roots.get(&canonical_root) else {
             bail!("regeneration returned an unknown package");
         };
+        let returned_relative = file
+            .file
+            .strip_prefix(&file.root)
+            .context("regeneration escaped returned package root")?;
+        let mut component_path = file.root.clone();
+        for component in returned_relative.components() {
+            if !matches!(component, std::path::Component::Normal(_)) {
+                bail!("regeneration returned an invalid declaration path");
+            }
+            component_path.push(component.as_os_str());
+            if std::fs::symlink_metadata(&component_path)?.file_type().is_symlink() {
+                bail!("regeneration returned a symlinked declaration path");
+            }
+        }
         let canonical = file.file.canonicalize()?;
         let relative =
-            canonical.strip_prefix(&file.root).context("regeneration escaped package root")?;
+            canonical.strip_prefix(&canonical_root).context("regeneration escaped package root")?;
+        if relative.components().any(|component| component.as_os_str() == "node_modules") {
+            bail!("regeneration returned a file from a nested dependency");
+        }
         if roots.keys().any(|other| {
-            other != &file.root && other.starts_with(&file.root) && canonical.starts_with(other)
+            other != &canonical_root
+                && other.starts_with(&canonical_root)
+                && canonical.starts_with(other)
         }) {
             bail!("regeneration assigned a file to an outer package");
         }

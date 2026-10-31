@@ -38,6 +38,9 @@ pub fn plan(patches: &[DeclarationPatch], packages: &[PathBuf]) -> Result<PatchP
             if file.path.components().any(|component| !matches!(component, Component::Normal(_))) {
                 bail!("declaration patch contains a path outside its package");
             }
+            if file.path.components().any(|component| component.as_os_str() == "node_modules") {
+                bail!("declaration patch belongs to a nested dependency");
+            }
             let path =
                 file.path.to_str().context("declaration path is not UTF-8")?.replace('\\', "/");
             if !path
@@ -52,7 +55,9 @@ pub fn plan(patches: &[DeclarationPatch], packages: &[PathBuf]) -> Result<PatchP
             }
             for root in package_roots {
                 let actual = root.join(&file.path).canonicalize()?;
-                if !actual.starts_with(root) || std::fs::read_to_string(&actual)? != file.original {
+                if actual != root.join(&file.path)
+                    || std::fs::read_to_string(&actual)? != file.original
+                {
                     bail!("{} changed after declaration verification", patch.package);
                 }
             }
@@ -107,6 +112,11 @@ pub fn apply(workspace: &Path, proposed: &str, plan: &PatchPlan) -> Result<bool>
     };
     repair::merge(&original, proposed)?;
     let root = workspace.parent().context("workspace has no parent")?.canonicalize()?;
+    let patch_dir = root.join("patches");
+    if std::fs::symlink_metadata(&patch_dir).is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        bail!("workspace patch directory must not be a symlink");
+    }
     for (relative, content) in &plan.artifacts {
         if relative.parent() != Some(Path::new("patches"))
             || relative.components().any(|component| !matches!(component, Component::Normal(_)))
@@ -114,6 +124,10 @@ pub fn apply(workspace: &Path, proposed: &str, plan: &PatchPlan) -> Result<bool>
             bail!("patch artifact escapes the workspace patch directory");
         }
         let path = root.join(relative);
+        if std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            bail!("patch artifact must not be a symlink: {}", path.display());
+        }
         if path.exists()
             && (!path.canonicalize()?.starts_with(&root)
                 || std::fs::read_to_string(&path)? != *content)
@@ -122,29 +136,51 @@ pub fn apply(workspace: &Path, proposed: &str, plan: &PatchPlan) -> Result<bool>
         }
     }
     let mut created = Vec::new();
-    for (relative, content) in &plan.artifacts {
-        let path = root.join(relative);
-        if path.exists() {
-            continue;
+    let applied = (|| -> Result<bool> {
+        for (relative, content) in &plan.artifacts {
+            let path = root.join(relative);
+            if path.exists() {
+                continue;
+            }
+            let directory = path.parent().context("patch has no parent")?;
+            std::fs::create_dir_all(directory)?;
+            if !directory.canonicalize()?.starts_with(&root) {
+                bail!("patch directory escapes workspace");
+            }
+            let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
+            temporary.write_all(content.as_bytes())?;
+            temporary.as_file().sync_all()?;
+            temporary
+                .persist_noclobber(&path)
+                .with_context(|| format!("writing {}", path.display()))?;
+            created.push((path, content));
         }
-        let directory = path.parent().context("patch has no parent")?;
-        std::fs::create_dir_all(directory)?;
-        if !directory.canonicalize()?.starts_with(&root) {
-            bail!("patch directory escapes workspace");
+        let current = match std::fs::read_to_string(workspace) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error.into()),
+        };
+        if current != original {
+            bail!("{} changed during repair; rerun xray", workspace.display());
         }
-        let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
-        temporary.write_all(content.as_bytes())?;
-        temporary.as_file().sync_all()?;
-        temporary
-            .persist_noclobber(&path)
-            .with_context(|| format!("writing {}", path.display()))?;
-        created.push(path);
-    }
-    match repair::apply(workspace, proposed) {
-        Ok(changed) => Ok(changed || !created.is_empty()),
+        Ok(repair::apply(workspace, proposed)? || !created.is_empty())
+    })();
+    match applied {
+        Ok(changed) => Ok(changed),
         Err(error) => {
-            for path in created {
-                std::fs::remove_file(path)?;
+            let mut failures = Vec::new();
+            for (path, content) in created {
+                let unchanged = std::fs::symlink_metadata(&path)
+                    .is_ok_and(|metadata| !metadata.file_type().is_symlink())
+                    && std::fs::read_to_string(&path).is_ok_and(|current| current == *content);
+                if !unchanged {
+                    failures.push(format!("{} changed during rollback", path.display()));
+                } else if let Err(rollback_error) = std::fs::remove_file(&path) {
+                    failures.push(format!("{}: {rollback_error}", path.display()));
+                }
+            }
+            if !failures.is_empty() {
+                bail!("{error}; could not roll back patch artifacts: {}", failures.join(", "));
             }
             Err(error)
         }

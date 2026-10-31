@@ -253,3 +253,38 @@ After restricting repair scanning away from unrelated test fixtures, the Nuxt
 whole-workspace dry run no longer reported the vendored jasmine CSS hack. It
 still exited with an incomplete-scan diagnostic for the malformed unenv
 constants declaration and excluded that package from the partial proposal.
+
+## Browser-field replacement
+
+The published `coinstring@2.0.0` imports Node's `crypto` and maps it to
+`crypto-browserify` in its browser field, but lists the replacement only as a
+development dependency. In a global-store, hoisting-disabled consumer with
+`crypto-browserify@2.1.8` installed, esbuild 0.25.12 could not resolve the
+browser mapping. Xray reported the replacement with evidence at
+`lib/coinstring.js:1`. Applying its generated optional-peer extension and
+reinstalling made the same browser-platform bundle command succeed. The command
+marked `assert`, `buffer`, and `util` external to isolate the mapping; it did
+not verify browser execution or provide those unrelated builtins. The exact
+registry tarball is `https://registry.npmjs.org/coinstring/-/coinstring-2.0.0.tgz`,
+with integrity `sha512-ZobmzumZOIgNX/ZiejHZQVzEbsXz30xLIRkTbZOW8Urcgm3iWGZPSsLq27N7/LE2+0/UiFR+TIbqX5HRJLV6nw==`.
+
+`stream@0.0.3` is a useful negative control: its browser field maps `emitter`
+to the undeclared `emitter-component`, but the shipped entry actually imports
+the separately declared `component-emitter`, so the mapping alone does not
+establish a missing dependency.
+
+## Ambient NodeJS namespace control
+
+`consola@3.4.2`, present in the Nuxt dependency graph, references
+`NodeJS.WriteStream` in its published declarations and lists `@types/node` only
+as a development dependency. In a hoisting-disabled global-store consumer,
+TypeScript 5.9.3 compiled an import of consola when the consumer directly
+installed `@types/node@22.14.1`, without a package extension. Removing that
+consumer dependency and adding `@types/node` as a dependency of consola through
+`packageExtensions` did **not** fix the `Cannot find namespace 'NodeJS'`
+errors. With the types package installed in the consumer, setting `types: []`
+still produced those errors; `types: ["node"]` and no extension passed. The
+ambient namespace is controlled by the consumer's type inclusion, so its
+presence alone is not evidence that linking a package dependency will repair a
+strict-store failure. Tarball: `https://registry.npmjs.org/consola/-/consola-3.4.2.tgz`,
+integrity `sha512-5IKcdX0nnYavi6G7TtOhwkYzyjfJlatbjMjuLSfE2kYT5pMDOilZ4OvMhi637CcDICTmz3wARPoyhqyX1Y+XvA==`.

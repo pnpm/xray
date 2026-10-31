@@ -85,21 +85,7 @@ pub fn select(
 // Prefer a provider explicitly declared by a workspace importer. If importers
 // declare different versions there is no single safe answer for a global fix.
 fn direct_types_providers(root: &Path) -> Result<BTreeMap<String, BTreeSet<String>>> {
-    let mut importers = BTreeSet::from([root.to_path_buf()]);
-    let lock = root.join("pnpm-lock.yaml");
-    if lock.is_file() {
-        let documents = yaml_rust2::YamlLoader::load_from_str(&std::fs::read_to_string(lock)?)?;
-        let canonical_root = root.canonicalize()?;
-        if let Some(map) = documents.first().and_then(|doc| doc["importers"].as_hash()) {
-            for name in map.keys().filter_map(yaml_rust2::Yaml::as_str) {
-                if let Ok(path) = root.join(name).canonicalize() {
-                    if path.starts_with(&canonical_root) {
-                        importers.insert(path);
-                    }
-                }
-            }
-        }
-    }
+    let importers = crate::workspace::projects(root)?;
     let mut direct = BTreeMap::<String, BTreeSet<String>>::new();
     for importer in importers {
         if !importer.join("package.json").is_file() {

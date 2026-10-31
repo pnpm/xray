@@ -45,3 +45,37 @@ fn refuses_nested_file_attributed_to_outer_package() {
     let wrong = BridgeFile { root, file, original: "old".into(), replacement: "new".into() };
     assert!(verified_patches(result(vec![wrong]), &roots).is_err());
 }
+
+#[cfg(windows)]
+#[test]
+fn accepts_node_nonverbatim_spelling_for_a_canonical_windows_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let roots = BTreeMap::from([(root.clone(), "fixture@1".into())]);
+    let valid = item(&root, "index.d.ts", "old", "new");
+    let strip = |path: &std::path::Path| {
+        std::path::PathBuf::from(
+            path.to_str().unwrap().strip_prefix(r"\\?\").unwrap_or(path.to_str().unwrap()),
+        )
+    };
+    let node_file = BridgeFile { root: strip(&valid.root), file: strip(&valid.file), ..valid };
+    assert!(verified_patches(result(vec![node_file]), &roots).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_a_declaration_file_reached_through_a_symlink() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let roots = BTreeMap::from([(root.clone(), "fixture@1".into())]);
+    std::fs::write(root.join("actual.d.ts"), "old").unwrap();
+    symlink("actual.d.ts", root.join("index.d.ts")).unwrap();
+    let file = BridgeFile {
+        root: root.clone(),
+        file: root.join("index.d.ts"),
+        original: "old".into(),
+        replacement: "new".into(),
+    };
+    assert!(verified_patches(result(vec![file]), &roots).is_err());
+}

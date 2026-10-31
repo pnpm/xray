@@ -238,6 +238,23 @@ try {
     assertRepaired(firebaseRoot, '@firebase/analytics-types@0.8.5', '@firebase/app-types')
     console.log(`PASS ${label}: undeclared type dependency fails before repair and typechecks afterward`)
 
+    const browserRoot = join(temp, globalStore ? 'browser-global' : 'browser-isolated')
+    const browserApp = join(browserRoot, 'packages/app')
+    await mkdir(browserApp, { recursive: true })
+    await writeFile(join(browserRoot, 'pnpm-workspace.yaml'), settings)
+    await writeFile(join(browserApp, 'package.json'), JSON.stringify({ name: 'xray-browser-consumer', private: true, type: 'module', dependencies: { coinstring: '2.0.0', 'crypto-browserify': '2.1.8', esbuild: '0.25.12' } }))
+    await writeFile(join(browserApp, 'index.js'), "import coinstring from 'coinstring'; console.log(coinstring);\n")
+    checked('pnpm', ['install', '--ignore-scripts'], browserRoot)
+    const esbuild = join(browserApp, 'node_modules/.bin/esbuild')
+    const esbuildArgs = ['index.js', '--bundle', '--platform=browser', '--external:assert', '--external:buffer', '--external:util', '--outfile=out.js']
+    const beforeBrowser = run(esbuild, esbuildArgs, browserApp)
+    if (beforeBrowser.status === 0 || !`${beforeBrowser.stdout}${beforeBrowser.stderr}`.includes('Could not resolve \"crypto\"')) throw new Error(`${label}: expected missing browser mapping dependency: ${beforeBrowser.stdout}\n${beforeBrowser.stderr}`)
+    await applyFix(browserRoot, 'crypto-browserify')
+    checked('pnpm', ['install', '--ignore-scripts', '--no-frozen-lockfile'], browserRoot)
+    checked(esbuild, esbuildArgs, browserApp)
+    assertRepaired(browserRoot, 'coinstring@2.0.0', 'crypto-browserify')
+    console.log(`PASS ${label}: browser bundling fails before repair and succeeds afterward with host builtins external`)
+
     for (const [nodeTypes, compatible] of [['22.14.1', true], ['24.19.2', false]]) {
       const regenRoot = join(temp, `unenv-${globalStore ? 'global' : 'isolated'}-${nodeTypes}`)
       await mkdir(regenRoot, { recursive: true })
@@ -270,6 +287,26 @@ try {
       const afterOutput = JSON.parse(afterScan.stdout)
       if (afterScan.status !== 0 || !afterOutput.complete || afterOutput.diagnostics.length !== 0) throw new Error(`${label}: patched project scan remains incomplete: ${afterScan.stdout}\n${afterScan.stderr}`)
       console.log(`PASS ${label}: regenerated declarations repair unenv and typecheck after reinstall`)
+      checked(binary, ['--fix', regenRoot], regenRoot)
+      const guarded = join(regenRoot, 'node_modules/regeneration-guard')
+      await mkdir(guarded, { recursive: true })
+      await writeFile(join(guarded, 'package.json'), JSON.stringify({ name: 'regeneration-guard', version: '1.0.0', type: 'module', main: 'index.js', types: 'index.d.ts' }))
+      await writeFile(join(guarded, 'index.js'), "export function used() { return 1 }\nexport function stable(value) { return value }\n")
+      await writeFile(join(regenRoot, 'index.ts'), "import { used } from 'regeneration-guard'; console.log(used());\n")
+      const guardedSettings = await readFile(regenWorkspace, 'utf8')
+      const guardPath = join(regenRoot, 'patches/regeneration-guard@1.0.0.patch')
+      for (const [name, declaration] of [
+        ['function signature', 'export declare function used(): number;\nexport declare function stable(value: string): number;\nexport declare const;\n'],
+        ['declaration-only interface', 'export declare function used(): number;\nexport interface PublicType { id: string }\nexport declare const;\n'],
+      ]) {
+        await writeFile(join(guarded, 'index.d.ts'), declaration)
+        const refused = run(binary, ['--fix', '--regenerate-types', regenRoot], regenRoot)
+        if (refused.status === 0 || !refused.stderr.includes('existing export') || await readFile(regenWorkspace, 'utf8') !== guardedSettings || await readFile(guardPath, 'utf8').then(() => true, () => false)) throw new Error(`${label}: unsafe ${name} regeneration was not rejected: ${refused.status} ${refused.stderr}`)
+      }
+      await writeFile(join(regenRoot, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'esnext', module: 'nodenext', moduleResolution: 'nodenext', noEmit: true }, references: [{ path: './other' }], include: ['index.ts'] }))
+      const references = run(binary, ['--fix', '--regenerate-types', regenRoot], regenRoot)
+      if (references.status === 0 || !references.stderr.includes('project references are not supported') || await readFile(regenWorkspace, 'utf8') !== guardedSettings || await readFile(guardPath, 'utf8').then(() => true, () => false)) throw new Error(`${label}: project references were not rejected safely: ${references.status} ${references.stderr}`)
+      console.log(`PASS ${label}: regeneration rejects API erosion and project references without writes`)
     }
   }
 } finally {

@@ -96,6 +96,18 @@ for (const [declaration, { runtime }] of candidates) {
     try { return (symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol).flags; }
     catch { return undefined; }
   };
+  const actualSymbol = (checker, symbol) => symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+  const shape = (checker, type, location, format) => {
+    const properties = checker.getPropertiesOfType(type).map(property => ({
+      name: property.name,
+      optional: Boolean(property.flags & ts.SymbolFlags.Optional),
+      readonly: Boolean(property.declarations?.some(declaration => ts.getCombinedModifierFlags(declaration) & ts.ModifierFlags.Readonly)),
+      type: checker.typeToString(checker.getTypeOfSymbolAtLocation(property, location), undefined, format),
+    })).sort((left, right) => left.name.localeCompare(right.name));
+    const calls = checker.getSignaturesOfType(type, ts.SignatureKind.Call).map(signature => checker.signatureToString(signature, undefined, format)).sort();
+    const constructors = checker.getSignaturesOfType(type, ts.SignatureKind.Construct).map(signature => checker.signatureToString(signature, undefined, format)).sort();
+    return JSON.stringify({ properties, calls, constructors });
+  };
   for (const oldExport of oldExports) {
     const oldFlags = actualFlags(originalChecker, oldExport);
     const next = newExports.find(value => value.name === oldExport.name);
@@ -104,6 +116,33 @@ for (const [declaration, { runtime }] of candidates) {
     if (oldFlags === undefined || newFlags === undefined) reject(`Declaration generation rejected: cannot recover export ${oldExport.name} in ${declaration}.`);
     for (const mask of [ts.SymbolFlags.Type, ts.SymbolFlags.Value, ts.SymbolFlags.Namespace]) {
       if ((oldFlags & mask) && !(newFlags & mask)) reject(`Declaration generation rejected: existing export ${oldExport.name} would lose its type, value, or namespace in ${declaration}.`);
+    }
+    // Names and symbol kinds alone are insufficient: a generated `any` can
+    // silently erase an existing typed API while the consumer still compiles.
+    // Preserve the types of declarations whose own spans contain no syntax
+    // diagnostic. A malformed declaration itself cannot provide such proof.
+    const reliable = oldExport.declarations?.find(item => item.getSourceFile() === oldFile && !syntax.some(diagnostic =>
+      diagnostic.file === oldFile && diagnostic.start !== undefined && diagnostic.start >= item.getFullStart() && diagnostic.start <= item.end));
+    if (reliable) {
+      const oldActual = actualSymbol(originalChecker, oldExport);
+      const newActual = actualSymbol(fixedChecker, next);
+      for (const mask of [ts.SymbolFlags.Type, ts.SymbolFlags.Value]) {
+        if (!(oldFlags & mask)) continue;
+        const oldType = mask === ts.SymbolFlags.Type ? originalChecker.getDeclaredTypeOfSymbol(oldActual) : originalChecker.getTypeOfSymbolAtLocation(oldActual, reliable);
+        const newType = mask === ts.SymbolFlags.Type ? fixedChecker.getDeclaredTypeOfSymbol(newActual) : fixedChecker.getTypeOfSymbolAtLocation(newActual, decl);
+        const format = ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseFullyQualifiedType;
+        const oldText = originalChecker.typeToString(oldType, undefined, format);
+        const newText = fixedChecker.typeToString(newType, undefined, format);
+        // A previously unconstrained `any` may safely become more precise. An
+        // empty object can gain members, but only if the replacement is still
+        // an object (never `any`). Keep all other types identical.
+        const refinement = oldText === 'any' || (oldText === '{}' && Boolean(newType.flags & ts.TypeFlags.Object));
+        if (oldText !== newText && !refinement)
+          reject(`Declaration generation rejected: existing export ${oldExport.name} would change type in ${declaration}.`);
+        if (!refinement && oldType.flags & ts.TypeFlags.Object && newType.flags & ts.TypeFlags.Object &&
+            shape(originalChecker, oldType, reliable, format) !== shape(fixedChecker, newType, decl, format))
+          reject(`Declaration generation rejected: existing export ${oldExport.name} would change its members in ${declaration}.`);
+      }
     }
   }
   const jsExports = source && exportsOf(jsChecker, source);

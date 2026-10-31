@@ -73,3 +73,39 @@ fn refuses_conflicting_artifacts_and_paths_without_changing_settings() {
     assert_eq!(std::fs::read_to_string(&workspace).unwrap(), original);
     assert_eq!(std::fs::read_to_string(path).unwrap(), "user patch");
 }
+
+#[cfg(unix)]
+#[test]
+fn rejects_symlinked_declarations_and_patch_directories() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let package = root.path().join("node_modules/example");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("package.json"), r#"{"name":"example","version":"1.0.0"}"#)
+        .unwrap();
+    std::fs::write(package.join("real.d.ts"), "bad").unwrap();
+    symlink("real.d.ts", package.join("index.d.ts")).unwrap();
+    let patch = DeclarationPatch {
+        package: "example@1.0.0".into(),
+        compiler: "5.0.0".into(),
+        files: vec![DeclarationFile {
+            path: "index.d.ts".into(),
+            original: "bad".into(),
+            replacement: "good".into(),
+        }],
+    };
+    assert!(plan(&[patch], &[package]).is_err());
+    let actual = root.path().join("actual");
+    std::fs::create_dir(&actual).unwrap();
+    symlink(&actual, root.path().join("patches")).unwrap();
+    let proposal = super::PatchPlan {
+        configuration: "patchedDependencies:\n  example: patches/example.patch\n".into(),
+        artifacts: std::collections::BTreeMap::from([(
+            "patches/example.patch".into(),
+            "patch".into(),
+        )]),
+    };
+    assert!(apply(&root.path().join("pnpm-workspace.yaml"), &proposal.configuration, &proposal)
+        .is_err());
+    assert!(!actual.join("example.patch").exists());
+}

@@ -6,7 +6,7 @@ use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
 };
-use yaml_rust2::{Yaml, YamlLoader};
+use yaml_rust2::{yaml::Hash, Yaml, YamlLoader};
 
 /// Resolve the settings destination when invoked from a workspace member.
 pub fn workspace_root(project: &Path) -> Result<PathBuf> {
@@ -41,6 +41,7 @@ fn apply_text(raw: &str, reports: &mut Vec<PackageReport>) -> Result<()> {
         return Ok(());
     }
     let extensions = extensions.as_hash().context("packageExtensions must be a mapping")?;
+    validate_extensions(extensions)?;
     for report in reports.iter_mut() {
         let Some((name, version)) = report.package.rsplit_once('@') else { continue };
         let Ok(version) = version.parse::<Version>() else { continue };
@@ -63,6 +64,34 @@ fn apply_text(raw: &str, reports: &mut Vec<PackageReport>) -> Result<()> {
         });
     }
     reports.retain(|report| !report.findings.is_empty());
+    Ok(())
+}
+
+fn validate_extensions(extensions: &Hash) -> Result<()> {
+    for (selector, extension) in extensions {
+        let selector = selector.as_str().context("package extension selectors must be strings")?;
+        if let Some((name, range)) = selector.rsplit_once('@').filter(|(name, _)| !name.is_empty())
+        {
+            range
+                .parse::<Range>()
+                .with_context(|| format!("invalid extension selector {name}@{range}"))?;
+        }
+        let settings = extension
+            .as_hash()
+            .with_context(|| format!("extension {selector} must be a mapping"))?;
+        for field in ["dependencies", "optionalDependencies", "peerDependencies"] {
+            if let Some(value) = settings.get(&Yaml::String(field.into())) {
+                let values = value
+                    .as_hash()
+                    .with_context(|| format!("{selector}.{field} must be a mapping"))?;
+                for (dependency, range) in values {
+                    if dependency.as_str().is_none() || range.as_str().is_none() {
+                        bail!("{selector}.{field} must map dependency names to string ranges");
+                    }
+                }
+            }
+        }
+    }
     Ok(())
 }
 

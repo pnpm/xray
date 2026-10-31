@@ -95,7 +95,7 @@ fn analyze_inner(package_dir: &Path, scope: Scope, strict: bool) -> Result<Analy
                         scan::Requirement::Module(specifier)
                         | scan::Requirement::TypesReference(specifier)
                         | scan::Requirement::PathReference(specifier)
-                        | scan::Requirement::Style(specifier, _) => specifier,
+                        | scan::Requirement::Style(specifier, _) => specifier.as_str(),
                     };
                     if let scan::Requirement::Style(_, kind) = &requirement {
                         if resolve_style(file.parent().unwrap_or(package_dir), specifier, *kind)
@@ -110,7 +110,7 @@ fn analyze_inner(package_dir: &Path, scope: Scope, strict: bool) -> Result<Analy
                         file: filename.clone(),
                         line,
                         column,
-                        specifier: specifier.clone(),
+                        specifier: specifier.to_string(),
                         origin,
                     };
                     let mut targets = import_targets(&manifest, &requirement, specifier);

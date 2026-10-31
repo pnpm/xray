@@ -58,12 +58,32 @@ pub fn run(command: &[OsString], packages: &[PathBuf], project: &Path) -> Result
 // Escape spaces and non-ASCII bytes so NODE_OPTIONS doesn't split the URL.
 fn file_url(path: &Path) -> Result<String> {
     let path = path.to_str().context("trace hook path is not valid UTF-8")?;
-    let path = if cfg!(windows) { path.replace('\\', "/") } else { path.to_string() };
-    let mut url = String::from("file://");
-    if !path.starts_with('/') {
-        url.push('/');
-    }
-    for byte in path.bytes() {
+    file_url_for_platform(path, cfg!(windows))
+}
+
+fn file_url_for_platform(path: &str, windows: bool) -> Result<String> {
+    let normalized = if windows {
+        if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+            format!("//{}", unc.replace('\\', "/"))
+        } else {
+            path.strip_prefix(r"\\?\").unwrap_or(path).replace('\\', "/")
+        }
+    } else {
+        path.to_string()
+    };
+    let (mut url, rest) = if windows && normalized.starts_with("//") {
+        (String::from("file://"), &normalized[2..])
+    } else if windows
+        && normalized.as_bytes().get(1) == Some(&b':')
+        && normalized.as_bytes().get(2) == Some(&b'/')
+    {
+        (String::from("file:///"), normalized.as_str())
+    } else if !windows && normalized.starts_with('/') {
+        (String::from("file://"), normalized.as_str())
+    } else {
+        anyhow::bail!("trace hook path must be absolute");
+    };
+    for byte in rest.bytes() {
         if byte.is_ascii_alphanumeric() || b"/-._~:".contains(&byte) {
             url.push(char::from(byte));
         } else {
@@ -99,7 +119,8 @@ fn reports_from_events(
         let Some((root, manifest)) = roots.iter().find(|(path, _)| parent.starts_with(path)) else {
             continue;
         };
-        let relative = parent.strip_prefix(root).unwrap_or(&parent).to_string_lossy().into_owned();
+        let relative =
+            parent.strip_prefix(root).unwrap_or(&parent).to_string_lossy().replace('\\', "/");
         let name = package_name(&event.specifier);
         let declared = name.is_some_and(|name| manifest.reachable().any(|dep| dep == name));
         let missing = event.code.is_empty()

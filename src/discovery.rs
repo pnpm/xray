@@ -1,12 +1,11 @@
 #[cfg(test)]
 mod tests;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use std::{
     collections::{BTreeSet, HashSet},
     path::{Path, PathBuf},
 };
-use yaml_rust2::YamlLoader;
 
 /// Every package reachable from the project, found by walking `node_modules`
 /// directories through their real paths. A package's own dependencies sit in the
@@ -15,33 +14,26 @@ use yaml_rust2::YamlLoader;
 /// virtual store and a global one alike.
 pub fn installed_packages(root: &Path) -> Result<Vec<PathBuf>> {
     let root_modules = root.join("node_modules");
-    if !root_modules.is_dir() {
+    let projects = crate::workspace::projects(root)?;
+    if !projects.iter().any(|project| project.join("node_modules").is_dir()) {
         bail!(
             "{} has no installed dependencies — run an install first, or pass --package",
             root.display(),
         );
     }
 
-    let mut workspace_roots = HashSet::from([root.canonicalize()?]);
+    let canonical_root = root.canonicalize()?;
+    let source_boundary = canonical_root
+        .ancestors()
+        .find(|directory| directory.join("pnpm-workspace.yaml").is_file())
+        .unwrap_or(&canonical_root)
+        .to_path_buf();
+    let mut workspace_roots = HashSet::from([canonical_root]);
     let mut queue = vec![root_modules.clone(), root_modules.join(".pnpm/node_modules")];
-    // With hoisting disabled, workspace-only dependencies need not be reachable
-    // from the root package. The installed lockfile lists every importer.
-    let lockfile = root.join("pnpm-lock.yaml");
-    if lockfile.is_file() {
-        let raw = std::fs::read_to_string(&lockfile)
-            .with_context(|| format!("reading {}", lockfile.display()))?;
-        let documents = YamlLoader::load_from_str(&raw)
-            .with_context(|| format!("parsing {}", lockfile.display()))?;
-        let canonical_root = root.canonicalize()?;
-        if let Some(importers) = documents.first().and_then(|doc| doc["importers"].as_hash()) {
-            for importer in importers.keys().filter_map(yaml_rust2::Yaml::as_str) {
-                let Ok(project) = root.join(importer).canonicalize() else { continue };
-                if project.starts_with(&canonical_root) {
-                    queue.push(project.join("node_modules"));
-                    workspace_roots.insert(project);
-                }
-            }
-        }
+    // Workspace-only dependencies need not be reachable from the root package.
+    for project in projects {
+        queue.push(project.join("node_modules"));
+        workspace_roots.insert(project);
     }
     let mut visited_dirs = HashSet::new();
     let mut packages = BTreeSet::new();
@@ -65,7 +57,10 @@ pub fn installed_packages(root: &Path) -> Result<Vec<PathBuf>> {
             // Workspace sources can legitimately import build/test dependencies
             // and are not registry artifacts. Traverse their links, but inspect
             // them only when the user explicitly requests --package.
-            if !workspace_roots.contains(&real) {
+            let authored = real.strip_prefix(&source_boundary).is_ok_and(|relative| {
+                !relative.components().any(|part| part.as_os_str() == "node_modules")
+            });
+            if !workspace_roots.contains(&real) && !authored {
                 packages.insert(real);
             }
         }

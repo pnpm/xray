@@ -13,6 +13,7 @@ mod report;
 mod scan;
 mod style;
 mod trace;
+mod workspace;
 
 #[cfg(test)]
 mod fixtures;
@@ -100,7 +101,9 @@ fn main() -> Result<ExitCode> {
         if args.package { args.path.clone() } else { configuration::workspace_root(&args.path)? };
     let providers = if !args.package
         && workspace != args.path.canonicalize()?
-        && workspace.join("node_modules").is_dir()
+        && workspace::projects(&workspace)?
+            .iter()
+            .any(|project| project.join("node_modules").is_dir())
     {
         installed_packages(&workspace)?
     } else {

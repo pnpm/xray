@@ -242,6 +242,19 @@ fn stylesheet_entries_follow_local_partials_and_report_external_packages() {
 }
 
 #[test]
+fn ambient_nodejs_namespace_does_not_suggest_an_ineffective_package_extension() {
+    use crate::fixtures::{manifest, write};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("pkg");
+    write(
+        &dir.join("package.json"),
+        &manifest("pkg", r#","types":"index.d.ts","devDependencies":{"@types/node":"^20"}"#),
+    );
+    write(&dir.join("index.d.ts"), "export declare const output: NodeJS.WriteStream;\n");
+    assert!(analyze(&dir, Scope::Declared).unwrap().is_none());
+}
+
+#[test]
 fn repair_scans_public_stylesheet_subpaths_without_manifest_entry() {
     use crate::fixtures::{manifest, write};
     let root = tempfile::tempdir().unwrap();

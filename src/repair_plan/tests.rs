@@ -1,4 +1,4 @@
-use super::{exact_version, has_types, select};
+use super::{direct_types_providers, exact_version, has_types, select};
 use crate::{
     manifest::Manifest,
     report::{Evidence, Finding, PackageReport, Severity},
@@ -173,4 +173,21 @@ fn permits_concrete_prerelease_but_not_a_range() {
     assert!(exact_version("1.2.3-beta.1"));
     assert!(!exact_version("^1.2.3"));
     assert!(!exact_version("*"));
+}
+
+#[test]
+fn separate_lockfile_workspaces_supply_direct_type_providers() {
+    let root = tempfile::tempdir().unwrap();
+    let member = root.path().join("packages/member");
+    std::fs::create_dir_all(&member).unwrap();
+    std::fs::write(
+        root.path().join("pnpm-workspace.yaml"),
+        "packages: [packages/*]\nsharedWorkspaceLockfile: false\n",
+    )
+    .unwrap();
+    std::fs::write(member.join("package.json"), r#"{"dependencies":{"@types/estree":"1.0.8"}}"#)
+        .unwrap();
+    package(&member, "node_modules/@types/estree", "@types/estree", "1.0.8");
+    let providers = direct_types_providers(root.path()).unwrap();
+    assert_eq!(providers["@types/estree"], BTreeSet::from(["1.0.8".into()]));
 }

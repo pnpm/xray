@@ -47,14 +47,17 @@ Rollup case verifies that a missing declaration resolves through the installed
 Components case verifies undeclared Sass subpath imports by running a real Vite
 build before and after the repair. The unenv case verifies opt-in declaration
 regeneration with compatible TypeScript and Node types, and checks that an
-incompatible Node types version produces no patch or workspace changes.
+incompatible Node types version produces no patch or workspace changes. The
+browser mapping case checks esbuild bundling with selected host builtins external;
+it does not claim a working browser runtime. Synthetic regeneration checks reject
+changes to unused exported types and projects with TypeScript references.
 
 ```sh
 cargo build
 node corpus/install-test.mjs
 ```
 
-The integration test covers nine known broken releases; it does not establish that
+The integration test covers ten known broken releases; it does not establish that
 all generated fixes are safe or that every registry package has been checked.
 
 ## CLI safety checks

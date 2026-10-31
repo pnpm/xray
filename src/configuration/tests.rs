@@ -63,3 +63,17 @@ fn workspace_members_resolve_the_nearest_settings_file() {
     std::fs::write(member.join("pnpm-workspace.yaml"), "packages: []\n").unwrap();
     assert_eq!(workspace_root(&member).unwrap(), member.canonicalize().unwrap());
 }
+
+#[test]
+fn invalid_extension_settings_cannot_hide_findings() {
+    for settings in [
+        "packageExtensions: { '@example/consumer': { dependencies: { helper: false } } }",
+        "packageExtensions: { '@example/consumer': { dependencies: [] } }",
+        "packageExtensions: { '@example/consumer': false }",
+        "packageExtensions: { '@example/consumer@not-a-range': {} }",
+    ] {
+        let mut reports = report(Origin::Runtime);
+        assert!(apply_text(settings, &mut reports).is_err(), "{settings}");
+        assert_eq!(reports.len(), 1);
+    }
+}

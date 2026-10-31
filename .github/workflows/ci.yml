@@ -38,15 +38,45 @@ jobs:
     - run: cargo clippy --locked --all-targets -- -D warnings
 
   test:
-    name: Test
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
     - name: Checkout Commit
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+    - name: Install Node for parser and trace tests
+      uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
+      with:
+        version: 12.16.1
+        runtime: node@24
+        install: false
     - run: cargo test --locked
+    - run: cargo build --locked
+    - name: Prepare declaration repair compiler
+      run: node -e "const fs=require('node:fs'); fs.mkdirSync(process.env.XRAY_SMOKE_DIR,{recursive:true}); fs.writeFileSync(require('node:path').join(process.env.XRAY_SMOKE_DIR,'package.json'),JSON.stringify({private:true}));"
+      env:
+        XRAY_SMOKE_DIR: ${{ runner.temp }}/xray-smoke-deps
+    - name: Install declaration repair compiler
+      run: pnpm --dir "${{ runner.temp }}/xray-smoke-deps" add --save-dev typescript@5.9.3 --ignore-scripts
+    - name: Check cross-platform declaration repair
+      run: node corpus/path-test.mjs
+      env:
+        XRAY_TYPESCRIPT: ${{ runner.temp }}/xray-smoke-deps/node_modules/typescript
+
+  test-status:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: test
+    if: always()
+    steps:
+    - name: Require all test platforms
+      run: test "${{ needs.test.result }}" = success
 
   doc:
     name: Doc
