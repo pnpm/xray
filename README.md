@@ -122,6 +122,8 @@ so a publisher's historical development range does not pull in an incompatible
 second type tree. For absent type dependencies it uses portable author development
 ranges. An untyped package's imports can be satisfied by an installed `@types`
 package; when its version is unambiguous, the repair selects that exact type package.
+Installed npm aliases are eligible providers when their target identity and
+version match the workspace importer's declaration.
 Findings without a selected repair remain visible in the scan output.
 
 Print the selected block instead of applying it:
