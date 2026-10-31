@@ -20,7 +20,13 @@ use walkdir::WalkDir;
 pub enum Scope {
     /// Follow the package's own encapsulation: walk from the entry points when
     /// an `exports` map says which files are reachable, and read everything
-    /// otherwise.
+    /// otherwise — every file of such a package is deep-importable.
+    ///
+    /// A repair ([`analyze_for_repair`]) is narrower on purpose: it always walks
+    /// from the entry points (plus every stylesheet, when there is no `exports`
+    /// map), so a test or template that merely ships in the tarball cannot add
+    /// a dependency to the consumer's lockfile. `--fix --all-files` widens it
+    /// to [`Scope::EveryFile`].
     Declared,
     /// Everything in the tarball, including tests, templates and examples whose
     /// dependencies belong to whoever runs them.
@@ -40,7 +46,9 @@ pub fn analyze_with_diagnostics(package_dir: &Path, scope: Scope) -> Result<Anal
     analyze_inner(package_dir, scope, false)
 }
 
-/// Analyze a package for an automatic repair, rejecting incomplete scans.
+/// Analyze a package for an automatic repair, rejecting incomplete scans. With
+/// [`Scope::Declared`] only the entry-point graph is read, whether or not the
+/// package has an `exports` map.
 pub fn analyze_for_repair(package_dir: &Path, scope: Scope) -> Result<Option<PackageReport>> {
     Ok(analyze_inner(package_dir, scope, true)?.report)
 }
