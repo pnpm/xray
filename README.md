@@ -117,13 +117,13 @@ final installed graph again. An already successful command leaves settings
 unchanged. The compiler can also identify a missing installed `@types` provider
 when a package already declares its untyped runtime dependency.
 
-Verification requires existing pnpm lockfiles and a reproducible installed layout.
+Verification requires pnpm 9 or newer, existing lockfiles, and a reproducible
+installed layout.
 Persist hoist and virtual store settings in pnpm configuration before running it;
 settings supplied only to an earlier install command are refused. Xray checks
 that installs and verification commands preserve that layout.
 
-Unsuccessful searches restore
-workspace settings, root and importer locks, generated patches, and the locked
+Unsuccessful searches restore workspace settings, root and importer locks, generated patches, and the locked
 dependency graph, returning the original command's failure status. User edits
 to managed files are preserved as conflicts. Interruptions stop the command's
 process group before rollback and return status 130. Processes which detach

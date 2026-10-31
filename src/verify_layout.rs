@@ -78,6 +78,21 @@ impl Layout {
     pub fn preflight(&self) -> Result<()> {
         for (project, signature) in &self.modules {
             let Some(signature) = signature else { continue };
+            let mut version_command = crate::process::command(std::ffi::OsStr::new("pnpm"));
+            let version = version_command
+                .arg("--version")
+                .current_dir(project)
+                .output()
+                .context("reading effective pnpm version")?;
+            if !version.status.success() {
+                bail!("cannot read effective pnpm version");
+            }
+            let version =
+                std::str::from_utf8(&version.stdout).context("invalid pnpm version")?.trim();
+            let major = node_semver::Version::parse(version).context("invalid pnpm version")?.major;
+            if major < 9 {
+                bail!("verified repair requires pnpm 9 or newer to establish layout defaults");
+            }
             let mut config = crate::process::command(std::ffi::OsStr::new("pnpm"));
             let output = config
                 .args(["config", "list", "--json"])
@@ -103,7 +118,7 @@ impl Layout {
                 std::str::from_utf8(&output.stdout).context("invalid pnpm store path")?.trim();
             let store =
                 Path::new(store).canonicalize().context("resolving effective pnpm store path")?;
-            if !matches_configuration(signature, &config, &store, project)? {
+            if !matches_configuration(signature, &config, &store, project, major)? {
                 bail!("installed pnpm layout differs from effective configuration at {}; persist the original hoist and virtual store settings and reinstall before using --verify", project.display());
             }
         }
@@ -116,6 +131,7 @@ fn matches_configuration(
     config: &serde_json::Value,
     store: &Path,
     project: &Path,
+    pnpm_major: u64,
 ) -> Result<bool> {
     let field = |camel: &str, kebab: &str| config.get(camel).or_else(|| config.get(kebab));
     let linker = field("nodeLinker", "node-linker")
@@ -149,7 +165,13 @@ fn matches_configuration(
     {
         vec!["*".into()]
     } else {
-        patterns("publicHoistPattern", "public-hoist-pattern")?.unwrap_or_default()
+        patterns("publicHoistPattern", "public-hoist-pattern")?.unwrap_or_else(|| {
+            if pnpm_major == 9 {
+                vec!["*eslint*".into(), "*prettier*".into()]
+            } else {
+                Vec::new()
+            }
+        })
     };
     let global = field("enableGlobalVirtualStore", "enable-global-virtual-store")
         .and_then(serde_json::Value::as_bool)

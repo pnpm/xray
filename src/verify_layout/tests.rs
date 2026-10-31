@@ -60,15 +60,22 @@ fn preflight_rejects_cli_only_global_and_hoist_settings() {
     let layout = Layout::capture(root).unwrap();
     let signature = layout.modules.get(root).unwrap().as_ref().unwrap();
     let effective = serde_json::json!({"enableGlobalVirtualStore":true,"hoist":false});
-    assert!(matches_configuration(signature, &effective, &store, root).unwrap());
+    assert!(matches_configuration(signature, &effective, &store, root, 12).unwrap());
     assert!(!matches_configuration(
         signature,
         &serde_json::json!({"enableGlobalVirtualStore":true}),
         &store,
-        root
+        root,
+        12,
     )
     .unwrap());
     // Local default may not exist; either an error or a mismatch rejects it.
-    assert!(!matches_configuration(signature, &serde_json::json!({"hoist":false}), &store, root)
-        .unwrap_or(false));
+    assert!(!matches_configuration(
+        signature,
+        &serde_json::json!({"hoist":false}),
+        &store,
+        root,
+        12
+    )
+    .unwrap_or(false));
 }
