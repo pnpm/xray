@@ -113,3 +113,33 @@ fn lockfile_importers_suffice_when_the_workspace_has_no_package_patterns() {
         ],
     );
 }
+
+#[test]
+fn v13_lockfile_projects_suffice_when_the_workspace_has_no_package_patterns() {
+    let root = tempfile::tempdir().unwrap();
+    for directory in ["tools/script", "fixtures/sample"] {
+        let path = root.path().join(directory);
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("package.json"), "{}").unwrap();
+    }
+    std::fs::write(
+        root.path().join("pnpm-lock.yaml"),
+        r#"{
+	"lockfileVersion": "13.0",
+	"projects": {
+		".": {},
+		"tools/script": {},
+	},
+	"packages": {},
+}"#,
+    )
+    .unwrap();
+    std::fs::write(root.path().join("pnpm-workspace.yaml"), "catalog: {}\n").unwrap();
+    assert_eq!(
+        projects(root.path()).unwrap(),
+        vec![
+            root.path().canonicalize().unwrap(),
+            root.path().join("tools/script").canonicalize().unwrap()
+        ],
+    );
+}
